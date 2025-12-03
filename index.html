@@ -8,11 +8,13 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&display=swap');
 
-        body {
+        html, body {
+            width: 100%;
+            height: 100%;
             margin: 0;
             overflow: hidden;
             font-family: 'Rajdhani', sans-serif;
-            background: #000;
+            background: transparent;
         }
 
         canvas {
@@ -26,32 +28,24 @@
             width: 100vw;
             height: 100vh;
             overflow: hidden;
-            z-index: 0;
-        }
-
-        #camera-background {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            overflow: hidden;
-            z-index: 0;
-            background: #000;
+            z-index: -2;
+            background: transparent;
+            pointer-events: none;
         }
 
         #camera-background video {
             position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
+            top: 0;
+            left: 0;
             width: 100%;
             height: 100%;
             object-fit: cover;
-            background: #000;
-            filter: saturate(0.8);
+            background: transparent;
+            filter: none;
+            pointer-events: none;
+            opacity: 1;
+            mix-blend-mode: normal;
         }
-*** End Patch
 
         #input-video {
             position: absolute;
@@ -69,11 +63,12 @@
             height: 100vh;
             z-index: 3;
             pointer-events: none;
+            background: transparent;
         }
 
         #gesture-log {
             position: absolute;
-            top: 275px;
+            top: 20px;
             right: 20px;
             width: 320px;
             background: rgba(0, 10, 30, 0.85);
@@ -450,7 +445,6 @@
     <div id="camera-background">
         <video id="camera-feed" autoplay playsinline muted></video>
     </div>
-    <div id="camera-overlay"></div>
     <div id="error-log"></div>
     <video id="input-video" playsinline autoplay></video>
     <canvas id="hand-canvas"></canvas>
@@ -494,16 +488,16 @@
         <div class="hud-row">
             <div class="panel">
                 <div class="slider-group">
-                    <label class="slider-label">Glow Intensity <span class="slider-value" id="glow-value">2.0</span></label>
-                    <input type="range" id="glow-slider" min="0" max="4" step="0.1" value="2.0">
+                    <label class="slider-label">Glow Intensity <span class="slider-value" id="glow-value">0.0</span></label>
+                    <input type="range" id="glow-slider" min="0" max="4" step="0.1" value="0.0">
                 </div>
                 <div class="slider-group">
-                    <label class="slider-label">Global Particle Size <span class="slider-value" id="size-value">7.0</span></label>
-                    <input type="range" id="size-slider" min="1" max="10" step="0.1" value="7.0">
+                    <label class="slider-label">Global Particle Size <span class="slider-value" id="size-value">9.9</span></label>
+                    <input type="range" id="size-slider" min="1" max="10" step="0.1" value="9.9">
                 </div>
                 <div class="slider-group">
-                    <label class="slider-label">Particle Color <span class="slider-value" id="color-value">#5EF3FF</span></label>
-                    <input type="color" id="particle-color" value="#5ef3ff">
+                    <label class="slider-label">Particle Color <span class="slider-value" id="color-value">#E0392C</span></label>
+                    <input type="color" id="particle-color" value="#e0392c">
                 </div>
             </div>
             <div class="panel">
@@ -512,16 +506,16 @@
                     <input type="range" id="density-slider" min="0" max="1" step="0.01" value="1.0">
                 </div>
                 <div class="slider-group">
-                    <label class="slider-label">Particle Spacing <span class="slider-value" id="spacing-value">1.00</span></label>
-                    <input type="range" id="spacing-slider" min="0.3" max="4" step="0.1" value="1.0">
+                    <label class="slider-label">Particle Spacing <span class="slider-value" id="spacing-value">4.00</span></label>
+                    <input type="range" id="spacing-slider" min="0.3" max="4" step="0.1" value="4.0">
                 </div>
                 <div class="slider-group">
-                    <label class="slider-label">Halo Star Size <span class="slider-value" id="halo-value">1.00</span></label>
-                    <input type="range" id="halo-slider" min="0.3" max="2.5" step="0.05" value="1.0">
+                    <label class="slider-label">Halo Star Size <span class="slider-value" id="halo-value">0.80</span></label>
+                    <input type="range" id="halo-slider" min="0.3" max="2.5" step="0.05" value="0.8">
                 </div>
                 <div class="slider-group">
-                    <label class="slider-label">Bokeh Color <span class="slider-value" id="bokeh-color-value">#1A6BFF</span></label>
-                    <input type="color" id="bokeh-color" value="#1a6bff">
+                    <label class="slider-label">Bokeh Color <span class="slider-value" id="bokeh-color-value">#DA1010</span></label>
+                    <input type="color" id="bokeh-color" value="#da1010">
                 </div>
             </div>
         </div>
@@ -529,12 +523,12 @@
         <div class="hud-row">
             <div class="panel">
                 <div class="slider-group">
-                    <label class="slider-label">Dot Min Scale <span class="slider-value" id="dot-min-value">1.00</span></label>
-                    <input type="range" id="dot-min-slider" min="0.4" max="2.0" step="0.05" value="1.0">
+                    <label class="slider-label">Dot Min Scale <span class="slider-value" id="dot-min-value">0.65</span></label>
+                    <input type="range" id="dot-min-slider" min="0.4" max="2.0" step="0.05" value="0.65">
                 </div>
-                <div class="slider-group">
-                    <label class="slider-label">Dot Max Scale <span class="slider-value" id="dot-max-value">2.50</span></label>
-                    <input type="range" id="dot-max-slider" min="1" max="5" step="0.05" value="2.5">
+                    <div class="slider-group">
+                    <label class="slider-label">Dot Max Scale <span class="slider-value" id="dot-max-value">2.95</span></label>
+                    <input type="range" id="dot-max-slider" min="1" max="5" step="0.05" value="2.95">
                 </div>
             </div>
             <div class="panel">
@@ -561,13 +555,3 @@
 </body>
 
 </html>
-        #camera-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            background: rgba(5, 10, 25, 0.28);
-            z-index: 1;
-            pointer-events: none;
-        }

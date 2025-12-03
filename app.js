@@ -82,7 +82,7 @@ const CONFIG = {
         glow: {
             sliderMin: 0.0,
             sliderMax: 4.0,
-            default: 2.0,
+            default: 0.0,
             step: 0.1,
             displayPrecision: 2,
             smoothing: 0.08,
@@ -97,7 +97,7 @@ const CONFIG = {
         size: {
             sliderMin: 1.0,
             sliderMax: 10.0,
-            default: 7.0,
+            default: 9.9,
             step: 0.1,
             displayPrecision: 2,
             smoothing: 0.1,
@@ -119,7 +119,7 @@ const CONFIG = {
         spacing: {
             sliderMin: 0.3,
             sliderMax: 4.0,
-            default: 1.0,
+            default: 4.0,
             step: 0.1,
             displayPrecision: 2,
             smoothing: 0.12,
@@ -130,14 +130,14 @@ const CONFIG = {
             min: {
                 sliderMin: 0.4,
                 sliderMax: 2.0,
-                default: 1.0,
+                default: 0.65,
                 step: 0.05,
                 displayPrecision: 2
             },
             max: {
                 sliderMin: 1.0,
                 sliderMax: 5.0,
-                default: 2.5,
+                default: 2.95,
                 step: 0.05,
                 displayPrecision: 2
             }
@@ -145,16 +145,16 @@ const CONFIG = {
         halo: {
             sliderMin: 0.3,
             sliderMax: 2.5,
-            default: 1.0,
+            default: 0.8,
             step: 0.05,
             displayPrecision: 2,
             smoothing: 0.1
         },
         bokehColor: {
-            default: '#1a6bff'
+            default: '#da1010'
         },
         color: {
-            default: '#5ef3ff'
+            default: '#e0392c'
         }
     }
 };
@@ -828,6 +828,7 @@ scene.background = null;
 // SHAPE GENERATION FUNCTIONS
 // ============================================
 let structuredSpherePattern = null;
+let structuredNovaPattern = null;
 
 function regenerateSpherePattern() {
     structuredSpherePattern = generateLayeredSpherePattern(PARTICLE_COUNT);
@@ -842,6 +843,21 @@ function getSpherePattern() {
         regenerateSpherePattern();
     }
     return structuredSpherePattern;
+}
+
+function regenerateNovaPattern() {
+    structuredNovaPattern = generateNovaPattern(PARTICLE_COUNT);
+}
+
+function getNovaPattern() {
+    if (
+        !structuredNovaPattern ||
+        structuredNovaPattern.count !== PARTICLE_COUNT ||
+        !structuredNovaPattern.linePositions
+    ) {
+        regenerateNovaPattern();
+    }
+    return structuredNovaPattern;
 }
 
 function generateLayeredSpherePattern(desiredCount) {
@@ -1028,6 +1044,78 @@ function generateLayeredSpherePattern(desiredCount) {
     };
 }
 
+function generateNovaPattern(desiredCount) {
+    const radialSpokes = 32;
+    const ringsPerSpoke = 10;
+    const spokes = [];
+    const positions = [];
+    const sizes = [];
+    const lineSegments = [];
+
+    for (let s = 0; s < radialSpokes; s++) {
+        const angle = (s / radialSpokes) * Math.PI * 2;
+        const dir = new THREE.Vector3(Math.cos(angle), Math.sin(angle * 0.5), Math.sin(angle));
+        dir.normalize();
+        const spoke = [];
+        for (let r = 0; r < ringsPerSpoke; r++) {
+            const radius = 3 + r * 2.2;
+            const jitter = (Math.random() - 0.5) * 0.8;
+            const pos = dir.clone().multiplyScalar(radius + jitter);
+            positions.push({ x: pos.x, y: pos.y, z: pos.z });
+            const bias = THREE.MathUtils.clamp(r / ringsPerSpoke + Math.random() * 0.1, 0, 1);
+            sizes.push(0.5 + bias * 0.8);
+            spoke.push(positions.length - 1);
+            if (r > 0) {
+                lineSegments.push([spoke[r - 1], spoke[r]]);
+            }
+        }
+        spokes.push(spoke);
+    }
+
+    const crossConnections = 12;
+    for (let i = 0; i < spokes.length; i++) {
+        const current = spokes[i];
+        const next = spokes[(i + 1) % spokes.length];
+        for (let r = 0; r < Math.min(current.length, next.length); r += Math.max(1, Math.floor(current.length / crossConnections))) {
+            lineSegments.push([current[r], next[r]]);
+        }
+    }
+
+    const uniqueCount = positions.length;
+    const outputPositions = new Array(desiredCount);
+    const outputSizes = new Array(desiredCount);
+    for (let i = 0; i < desiredCount; i++) {
+        const idx = i % uniqueCount;
+        outputPositions[i] = positions[idx];
+        outputSizes[i] = sizes[idx];
+    }
+
+    const linePositions = new Float32Array(lineSegments.length * 6);
+    const lineRandoms = new Float32Array(lineSegments.length * 2);
+    lineSegments.forEach((pair, segmentIndex) => {
+        const a = positions[pair[0]];
+        const b = positions[pair[1]];
+        const offset = segmentIndex * 6;
+        linePositions[offset] = a.x;
+        linePositions[offset + 1] = a.y;
+        linePositions[offset + 2] = a.z;
+        linePositions[offset + 3] = b.x;
+        linePositions[offset + 4] = b.y;
+        linePositions[offset + 5] = b.z;
+        const variance = Math.random();
+        lineRandoms[segmentIndex * 2] = variance;
+        lineRandoms[segmentIndex * 2 + 1] = variance;
+    });
+
+    return {
+        positions: outputPositions,
+        sizes: outputSizes,
+        linePositions,
+        lineRandoms,
+        count: desiredCount
+    };
+}
+
 function getPointHeart() {
     let t = Math.random() * Math.PI * 2;
     let u = Math.random();
@@ -1121,6 +1209,7 @@ function setShape(type) {
     const useStructuredSphere = type === 'sphere';
     const useNova = type === 'fireworks';
     const spherePattern = useStructuredSphere ? getSpherePattern() : null;
+    const novaPattern = useNova ? getNovaPattern() : null;
 
     for (let i = 0; i < PARTICLE_COUNT; i++) {
         let p;
@@ -1130,8 +1219,10 @@ function setShape(type) {
             p = spherePattern.positions[idx];
             sizeFactor = spherePattern.sizes[idx];
             randArr[i] = Math.random();
-        } else if (useNova) {
-            p = getPointFireworks();
+        } else if (useNova && novaPattern) {
+            const idx = i % novaPattern.positions.length;
+            p = novaPattern.positions[idx];
+            sizeFactor = novaPattern.sizes[idx];
             randArr[i] = Math.random();
         } else {
             p = getPointOnSphere();
@@ -1146,13 +1237,14 @@ function setShape(type) {
     geo.attributes.aRandom.needsUpdate = true;
     geo.attributes.aSizeBias.needsUpdate = true;
 
-    if (useStructuredSphere && spherePattern && spherePattern.linePositions) {
-        sphereLineGeometry.setAttribute('position', new THREE.BufferAttribute(spherePattern.linePositions, 3));
-        if (spherePattern.lineRandoms) {
-            sphereLineGeometry.setAttribute('aRandom', new THREE.BufferAttribute(spherePattern.lineRandoms, 1));
+    const patternSource = useStructuredSphere ? spherePattern : (useNova ? novaPattern : null);
+    if (patternSource && patternSource.linePositions) {
+        sphereLineGeometry.setAttribute('position', new THREE.BufferAttribute(patternSource.linePositions, 3));
+        if (patternSource.lineRandoms) {
+            sphereLineGeometry.setAttribute('aRandom', new THREE.BufferAttribute(patternSource.lineRandoms, 1));
         }
         sphereLineGeometry.computeBoundingSphere();
-        sphereLineGeometry.setDrawRange(0, spherePattern.linePositions.length / 3);
+        sphereLineGeometry.setDrawRange(0, patternSource.linePositions.length / 3);
         sphereLines.visible = true;
     } else {
         sphereLineGeometry.setDrawRange(0, 0);
@@ -1529,8 +1621,13 @@ function detectHands() {
 }
 
 function drawHandLandmarks(result) {
+    const neonGreen = '#39ff14';
+    const neonPink = '#ff2d95';
+
     handCtx.save();
     handCtx.clearRect(0, 0, handCanvas.width, handCanvas.height);
+    handCtx.font = '12px Rajdhani, sans-serif';
+    handCtx.textBaseline = 'middle';
 
     if (result.landmarks) {
         for (const landmarks of result.landmarks) {
@@ -1544,8 +1641,10 @@ function drawHandLandmarks(result) {
                 [5, 9], [9, 13], [13, 17] // Palm
             ];
 
-            handCtx.strokeStyle = 'rgba(0, 255, 255, 0.8)';
+            handCtx.strokeStyle = neonGreen;
             handCtx.lineWidth = 2;
+            handCtx.shadowColor = neonGreen;
+            handCtx.shadowBlur = 8;
 
             for (const [start, end] of connections) {
                 const startPoint = landmarks[start];
@@ -1556,20 +1655,27 @@ function drawHandLandmarks(result) {
                 handCtx.stroke();
             }
 
-            // Draw landmarks
-            for (const landmark of landmarks) {
+            handCtx.shadowColor = neonPink;
+            handCtx.shadowBlur = 6;
+
+            // Draw landmarks + indices
+            landmarks.forEach((landmark, idx) => {
+                const x = landmark.x * handCanvas.width;
+                const y = landmark.y * handCanvas.height;
                 handCtx.beginPath();
-                handCtx.arc(
-                    landmark.x * handCanvas.width,
-                    landmark.y * handCanvas.height,
-                    5, 0, 2 * Math.PI
-                );
-                handCtx.fillStyle = 'rgba(255, 170, 0, 0.9)';
+                handCtx.arc(x, y, 5, 0, 2 * Math.PI);
+                handCtx.fillStyle = neonPink;
                 handCtx.fill();
-                handCtx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+                handCtx.strokeStyle = '#ffffff';
                 handCtx.lineWidth = 1;
                 handCtx.stroke();
-            }
+                handCtx.fillStyle = neonGreen;
+                handCtx.shadowColor = 'rgba(0,0,0,0.6)';
+                handCtx.shadowBlur = 0;
+                handCtx.fillText(idx.toString(), x + 8, y);
+                handCtx.shadowColor = neonPink;
+                handCtx.shadowBlur = 6;
+            });
         }
     }
 
