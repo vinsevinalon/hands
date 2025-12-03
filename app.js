@@ -1,5 +1,5 @@
 // Cosmic Particles - Hand Gesture Interactive Visualization
-// Optimized Version
+// Optimized Version with AI Enhancement
 
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -7,6 +7,8 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { FilesetResolver, HandLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm';
+import EnhancedGestureDetector from './src/ai/enhanced-detection.js';
+import DatasetCollector from './src/ai/training/dataset-collector.js';
 
 // ============================================
 // OBJECT POOL - Reduce GC pressure
@@ -385,6 +387,14 @@ class OneEuroFilter {
 const landmarkFilterBank = new Map();
 const fingerVelocityHistory = new Map();
 const gestureState = { active: 'Auto Mode', confidence: 0.4 };
+
+// ============================================
+// AI ENHANCEMENT
+// ============================================
+let enhancedDetector = null;
+let dataCollector = null;
+let aiEnabled = false;
+let trainingMode = false;
 const controlState = {
     glow: {
         value: CONFIG.controls.glow.default,
@@ -1560,6 +1570,34 @@ let lastVideoTime = -1;
 let lastDetectionTime = 0;
 const detectionInterval = 1000 / CONFIG.handDetection.fps; // Throttled to 20 FPS
 
+// ============================================
+// AI INITIALIZATION
+// ============================================
+async function initAI() {
+    try {
+        enhancedDetector = new EnhancedGestureDetector();
+        const loaded = await enhancedDetector.init('/models/gesture-model.json');
+        
+        if (loaded) {
+            aiEnabled = true;
+            console.log('✅ AI enhancement loaded successfully');
+            updateLog('gesture', '🤖 AI Mode Active');
+        } else {
+            console.log('⚠️ AI model not found, using rule-based detection');
+            aiEnabled = false;
+        }
+        
+        // Initialize data collector for training
+        dataCollector = new DatasetCollector();
+        
+        return loaded;
+    } catch (err) {
+        console.error('AI initialization error:', err);
+        aiEnabled = false;
+        return false;
+    }
+}
+
 // Physics State
 let smoothedExpansion = 0.5;
 let smoothedSwirl = 0.0;
@@ -2132,7 +2170,7 @@ function processGestures(result) {
         smoothedAttractorStrength *= 0.95;
         smoothedWindForce.multiplyScalar(0.95);
         smoothedPulse *= 0.95;
-        currentGesture = 'Auto Mode';
+        currentGesture = aiEnabled ? '🤖 AI Auto Mode' : 'Auto Mode';
         prevHandX = null;
         prevTips = [];
         prevFistAngle = null;
@@ -2140,6 +2178,25 @@ function processGestures(result) {
         depthVal.innerText = "AUTO";
         updateLog('openness', "AUTO");
         updateLog('gesture', currentGesture);
+        updateLog('expansion', smoothedExpansion.toFixed(3));
+        updateLog('swirl', smoothedSwirl.toFixed(3));
+        updateLog('wiggle', "0.000");
+        updateLog('explosion', "0.000");
+        updateLog('size', "AUTO");
+        updateLog('movement', "0.000");
+        targetRotationSpeed = CONFIG.physics.baseRotationSpeed;
+        fingerVelocityHistory.clear();
+        
+        // Reset AI detector
+        if (enhancedDetector) {
+            enhancedDetector.reset();
+        }
+        
+        if (!rotationGestureActive) {
+            decayRotationTarget();
+        }
+        commitGestureState(currentGesture, 0.05);
+        return;
         updateLog('expansion', smoothedExpansion.toFixed(3));
         updateLog('swirl', smoothedSwirl.toFixed(3));
         updateLog('wiggle', "0.000");
@@ -2164,18 +2221,24 @@ function processGestures(result) {
         const isFist = detectFist(hand);
         let isPinching = false;
         let isPeaceSign = false;
+        let ruleBasedGesture = { name: 'None', confidence: 0.5 };
 
         if (fingerCount === 5) {
             const swipeDirection = detectSwipe(hand);
             if (swipeDirection) {
                 changeShape(swipeDirection);
-                currentGesture = swipeDirection === 'right' ? '🖐️➡️ Swipe Right' : '🖐️⬅️ Swipe Left';
+                ruleBasedGesture = {
+                    name: swipeDirection === 'right' ? '🖐️➡️ Swipe Right' : '🖐️⬅️ Swipe Left',
+                    confidence: 0.9
+                };
+                currentGesture = ruleBasedGesture.name;
                 targetAttractorStrength = 0.0;
                 targetWindForce.set(0, 0, 0);
                 targetPulse = 0.0;
                 freezeTimeTarget = 1.0;
             } else {
-                currentGesture = '🖐️ Rotate + Expand';
+                ruleBasedGesture = { name: '🖐️ Rotate + Expand', confidence: 0.85 };
+                currentGesture = ruleBasedGesture.name;
                 smoothedExplosion = Math.min(1.5, smoothedExplosion + 0.03);
                 targetAttractorStrength = 0.0;
                 applyDirectionalWind(aggregatedHands.direction, 8, targetWindForce);
@@ -2186,7 +2249,8 @@ function processGestures(result) {
         } else {
             prevFistAngle = null;
             if (isFist) {
-                currentGesture = '✊ Collapse';
+                ruleBasedGesture = { name: '✊ Collapse', confidence: 0.9 };
+                currentGesture = ruleBasedGesture.name;
                 freezeTimeTarget = 0.7;
                 smoothedExpansion = Math.max(0, smoothedExpansion - 0.04);
                 targetAttractorStrength = 0.0;
@@ -2195,7 +2259,8 @@ function processGestures(result) {
             } else {
                 isPinching = detectPinch(hand);
                 if (isPinching) {
-                    currentGesture = '👌 Pinch (Attract)';
+                    ruleBasedGesture = { name: '👌 Pinch (Attract)', confidence: 0.85 };
+                    currentGesture = ruleBasedGesture.name;
                     const pinchCenter = getPinchCenter(hand);
                     mat.uniforms.uAttractorPos.value.set(
                         (pinchCenter.x - 0.5) * 60,
@@ -2209,20 +2274,23 @@ function processGestures(result) {
                 } else {
                     isPeaceSign = detectPeaceSign(hand);
                     if (isPeaceSign) {
-                        currentGesture = '✌️ Peace (Pulse)';
+                        ruleBasedGesture = { name: '✌️ Peace (Pulse)', confidence: 0.85 };
+                        currentGesture = ruleBasedGesture.name;
                         targetPulse = 1.0;
                         targetAttractorStrength = 0.0;
                         targetWindForce.set(0, 0, 0);
                         freezeTimeTarget = 1.0;
                     } else if (fingerCount === 1) {
-                        currentGesture = '☝️ One Finger (Collapse)';
+                        ruleBasedGesture = { name: '☝️ One Finger (Collapse)', confidence: 0.8 };
+                        currentGesture = ruleBasedGesture.name;
                         smoothedExpansion = Math.max(0, smoothedExpansion - 0.03);
                         targetAttractorStrength = 0.0;
                         targetWindForce.set(0, 0, 0);
                         targetPulse = 0.0;
                         freezeTimeTarget = 1.0;
                     } else {
-                        currentGesture = `🤚 ${fingerCount} Fingers`;
+                        ruleBasedGesture = { name: `🤚 ${fingerCount} Fingers`, confidence: 0.7 };
+                        currentGesture = ruleBasedGesture.name;
                         applyDirectionalWind(aggregatedHands.direction, 5, targetWindForce);
                         targetAttractorStrength = 0.0;
                         targetPulse = 0.0;
@@ -2230,6 +2298,30 @@ function processGestures(result) {
                     }
                 }
             }
+        }
+
+        // AI Enhancement - Try to improve gesture detection
+        if (enhancedDetector && aiEnabled) {
+            enhancedDetector.detect(result, ruleBasedGesture).then(aiResult => {
+                if (aiResult.source === 'AI' && aiResult.confidence > 0.85) {
+                    currentGesture = `🤖 ${aiResult.gesture}`;
+                    if (aiResult.confidence > 0.9) {
+                        console.log(`AI: ${aiResult.gesture} (${(aiResult.confidence * 100).toFixed(1)}%)`);
+                    }
+                    updateLog('gesture', currentGesture);
+                }
+            }).catch(err => {
+                console.warn('AI detection error:', err);
+            });
+        }
+
+        // Training mode - collect data
+        if (trainingMode && dataCollector && dataCollector.isRecording) {
+            dataCollector.addSample(result.landmarks, {
+                gesture: currentGesture,
+                fingerCount: fingerCount,
+                handScale: memoCache.getHandScale(hand, memoCache.frameId)
+            });
         }
 
         // Calculate expansion, wiggle, and other effects
@@ -2487,6 +2579,11 @@ window.addEventListener('beforeunload', () => {
     galaxyMat.dispose();
     particleTex.dispose();
     renderer.dispose();
+    
+    // Dispose AI resources
+    if (enhancedDetector) {
+        enhancedDetector.dispose();
+    }
 
     console.log('Resources cleaned up');
 });
@@ -2520,6 +2617,16 @@ function init() {
     initUIHandlers();
     initControlPanelToggle();
     initStartButton();
+    
+    // Initialize AI
+    initAI().then(loaded => {
+        if (loaded) {
+            console.log('✅ AI-enhanced gesture detection ready');
+        } else {
+            console.log('ℹ️ Using rule-based gesture detection');
+        }
+    });
+    
     initHandDetection();
     animate();
     console.log(`Initialized with ${PARTICLE_COUNT.toLocaleString()} particles`);
