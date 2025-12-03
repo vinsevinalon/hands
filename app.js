@@ -9,6 +9,68 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { FilesetResolver, HandLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm';
 
 // ============================================
+// OBJECT POOL - Reduce GC pressure
+// ============================================
+const vector3Pool = {
+    pool: [],
+    get() {
+        return this.pool.length > 0 ? this.pool.pop() : new THREE.Vector3();
+    },
+    release(v) {
+        v.set(0, 0, 0);
+        this.pool.push(v);
+    }
+};
+
+// ============================================
+// DOM ELEMENT CACHE - Reduce DOM queries
+// ============================================
+const domCache = {
+    video: null,
+    handCanvas: null,
+    handCtx: null,
+    loader: null,
+    startBtn: null,
+    wiggleVal: null,
+    depthVal: null,
+    gestureFeedbackEl: null,
+    gestureFeedbackLabel: null,
+    gestureFeedbackBar: null,
+    cameraFeed: null,
+    gestureToggle: null,
+    hud: null,
+    controlsToggle: null,
+    particleColor: null,
+    bokehColor: null,
+    colorValue: null,
+    bokehColorValue: null,
+    initialized: false,
+    
+    init() {
+        if (this.initialized) return;
+        this.video = document.getElementById('input-video');
+        this.cameraFeed = document.getElementById('camera-feed');
+        this.handCanvas = document.getElementById('hand-canvas');
+        this.handCtx = this.handCanvas?.getContext('2d', { willReadFrequently: true });
+        this.loader = document.getElementById('loader');
+        this.startBtn = document.getElementById('start-btn');
+        this.wiggleVal = document.getElementById('wiggle-val');
+        this.depthVal = document.getElementById('depth-val');
+        this.gestureFeedbackEl = document.getElementById('gesture-feedback');
+        this.gestureFeedbackLabel = document.getElementById('gesture-label');
+        this.gestureFeedbackBar = document.getElementById('gesture-meter-fill');
+        this.gestureToggle = document.getElementById('gesture-toggle');
+        this.hud = document.getElementById('hud');
+        this.controlsToggle = document.getElementById('controls-toggle');
+        this.particleColor = document.getElementById('particle-color');
+        this.bokehColor = document.getElementById('bokeh-color');
+        this.colorValue = document.getElementById('color-value');
+        this.bokehColorValue = document.getElementById('bokeh-color-value');
+        this.initialized = true;
+    }
+};
+
+// ============================================
 // CONFIGURATION
 // ============================================
 const CONFIG = {
@@ -356,14 +418,52 @@ const controlState = {
 const particleColor = new THREE.Color(CONFIG.controls.color.default);
 const bokehColor = new THREE.Color(CONFIG.controls.bokehColor.default);
 
+// ============================================
+// MEMOIZATION CACHE
+// ============================================
+const memoCache = {
+    handScale: new Map(),
+    frameId: 0,
+    
+    nextFrame() {
+        this.frameId++;
+        if (this.frameId > 10000) this.frameId = 0;
+    },
+    
+    getHandScale(hand, currentFrame) {
+        const key = `${currentFrame}`;
+        if (this.handScale.has(key)) {
+            return this.handScale.get(key);
+        }
+        const wrist = hand[0];
+        const indexBase = hand[5];
+        const pinkyBase = hand[17];
+        const palmWidth = Math.hypot(indexBase.x - pinkyBase.x, indexBase.y - pinkyBase.y);
+        const palmLength = Math.hypot(hand[9].x - wrist.x, hand[9].y - wrist.y);
+        const scale = Math.max(0.01, (palmWidth + palmLength) * 0.5);
+        this.handScale.set(key, scale);
+        if (this.handScale.size > 10) {
+            const firstKey = this.handScale.keys().next().value;
+            this.handScale.delete(firstKey);
+        }
+        return scale;
+    },
+    
+    clearFrame() {
+        // Only clear old entries periodically
+        if (this.frameId % 60 === 0) {
+            this.handScale.clear();
+        }
+    }
+};
+
 function setParticleColor(hexValue) {
     if (!hexValue) return;
     try {
         particleColor.set(hexValue);
         sharedUniforms.uBaseColor.value.copy(particleColor);
-        const display = document.getElementById('color-value');
-        if (display) {
-            display.innerText = hexValue.toUpperCase();
+        if (domCache.colorValue) {
+            domCache.colorValue.innerText = hexValue.toUpperCase();
         }
     } catch (e) {
         console.warn('Invalid color value', hexValue, e);
@@ -374,13 +474,13 @@ function setBokehColor(hexValue) {
     if (!hexValue) return;
     try {
         bokehColor.set(hexValue);
-        bokehMaterials.forEach(mat => {
-            mat.color.copy(bokehColor);
-            mat.needsUpdate = true;
-        });
-        const display = document.getElementById('bokeh-color-value');
-        if (display) {
-            display.innerText = hexValue.toUpperCase();
+        const len = bokehMaterials.length;
+        for (let i = 0; i < len; i++) {
+            bokehMaterials[i].color.copy(bokehColor);
+            bokehMaterials[i].needsUpdate = true;
+        }
+        if (domCache.bokehColorValue) {
+            domCache.bokehColorValue.innerText = hexValue.toUpperCase();
         }
     } catch (err) {
         console.warn('Invalid bokeh color', hexValue, err);
@@ -390,6 +490,59 @@ function setBokehColor(hexValue) {
 // ============================================
 // SHADERS
 // ============================================
+// Shared simplex noise function (deduplicated)
+const simplexNoiseGLSL = `
+vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+
+float snoise(vec3 v) {
+    const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+    const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+    vec3 i = floor(v + dot(v, C.yyy));
+    vec3 x0 = v - i + dot(i, C.xxx);
+    vec3 g = step(x0.yzx, x0.xyz);
+    vec3 l = 1.0 - g;
+    vec3 i1 = min(g.xyz, l.zxy);
+    vec3 i2 = max(g.xyz, l.zxy);
+    vec3 x1 = x0 - i1 + C.xxx;
+    vec3 x2 = x0 - i2 + C.yyy;
+    vec3 x3 = x0 - D.yyy;
+    i = mod289(i);
+    vec4 p = permute(permute(permute(
+            i.z + vec4(0.0, i1.z, i2.z, 1.0))
+            + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+            + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+    float n_ = 0.142857142857;
+    vec3 ns = n_ * D.wyz - D.xzx;
+    vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+    vec4 x_ = floor(j * ns.z);
+    vec4 y_ = floor(j - 7.0 * x_);
+    vec4 x = x_ * ns.x + ns.yyyy;
+    vec4 y = y_ * ns.x + ns.yyyy;
+    vec4 h = 1.0 - abs(x) - abs(y);
+    vec4 b0 = vec4(x.xy, y.xy);
+    vec4 b1 = vec4(x.zw, y.zw);
+    vec4 s0 = floor(b0)*2.0 + 1.0;
+    vec4 s1 = floor(b1)*2.0 + 1.0;
+    vec4 sh = -step(h, vec4(0.0));
+    vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+    vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+    vec3 p0 = vec3(a0.xy,h.x);
+    vec3 p1 = vec3(a0.zw,h.y);
+    vec3 p2 = vec3(a1.xy,h.z);
+    vec3 p3 = vec3(a1.zw,h.w);
+    vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+    p0 *= norm.x;
+    p1 *= norm.y;
+    p2 *= norm.z;
+    p3 *= norm.w;
+    vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+    m = m * m;
+    return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+}
+`;
 const vShader = `
     uniform float uTime;
     uniform float uExpansion;
@@ -416,57 +569,7 @@ const vShader = `
     varying float vAlpha;
     varying float vGlow;
 
-    // Simplex noise function
-    vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-    vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-    vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
-    vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
-
-    float snoise(vec3 v) {
-        const vec2 C = vec2(1.0/6.0, 1.0/3.0);
-        const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
-        vec3 i = floor(v + dot(v, C.yyy));
-        vec3 x0 = v - i + dot(i, C.xxx);
-        vec3 g = step(x0.yzx, x0.xyz);
-        vec3 l = 1.0 - g;
-        vec3 i1 = min(g.xyz, l.zxy);
-        vec3 i2 = max(g.xyz, l.zxy);
-        vec3 x1 = x0 - i1 + C.xxx;
-        vec3 x2 = x0 - i2 + C.yyy;
-        vec3 x3 = x0 - D.yyy;
-        i = mod289(i);
-        vec4 p = permute(permute(permute(
-                i.z + vec4(0.0, i1.z, i2.z, 1.0))
-                + i.y + vec4(0.0, i1.y, i2.y, 1.0))
-                + i.x + vec4(0.0, i1.x, i2.x, 1.0));
-        float n_ = 0.142857142857;
-        vec3 ns = n_ * D.wyz - D.xzx;
-        vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
-        vec4 x_ = floor(j * ns.z);
-        vec4 y_ = floor(j - 7.0 * x_);
-        vec4 x = x_ * ns.x + ns.yyyy;
-        vec4 y = y_ * ns.x + ns.yyyy;
-        vec4 h = 1.0 - abs(x) - abs(y);
-        vec4 b0 = vec4(x.xy, y.xy);
-        vec4 b1 = vec4(x.zw, y.zw);
-        vec4 s0 = floor(b0)*2.0 + 1.0;
-        vec4 s1 = floor(b1)*2.0 + 1.0;
-        vec4 sh = -step(h, vec4(0.0));
-        vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
-        vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
-        vec3 p0 = vec3(a0.xy,h.x);
-        vec3 p1 = vec3(a0.zw,h.y);
-        vec3 p2 = vec3(a1.xy,h.z);
-        vec3 p3 = vec3(a1.zw,h.w);
-        vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
-        p0 *= norm.x;
-        p1 *= norm.y;
-        p2 *= norm.z;
-        p3 *= norm.w;
-        vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
-        m = m * m;
-        return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
-    }
+    ${simplexNoiseGLSL}
 
     void main() {
         vec3 target = aTarget * uSpacing;
@@ -573,55 +676,7 @@ const lineVShader = `
     varying float vLineAlpha;
     varying float vLineGlow;
 
-    vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-    vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
-    vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
-    vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
-    float snoise(vec3 v) {
-        const vec2 C = vec2(1.0/6.0, 1.0/3.0);
-        const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
-        vec3 i = floor(v + dot(v, C.yyy));
-        vec3 x0 = v - i + dot(i, C.xxx);
-        vec3 g = step(x0.yzx, x0.xyz);
-        vec3 l = 1.0 - g;
-        vec3 i1 = min(g.xyz, l.zxy);
-        vec3 i2 = max(g.xyz, l.zxy);
-        vec3 x1 = x0 - i1 + C.xxx;
-        vec3 x2 = x0 - i2 + C.yyy;
-        vec3 x3 = x0 - D.yyy;
-        i = mod289(i);
-        vec4 p = permute(permute(permute(
-                i.z + vec4(0.0, i1.z, i2.z, 1.0))
-                + i.y + vec4(0.0, i1.y, i2.y, 1.0))
-                + i.x + vec4(0.0, i1.x, i2.x, 1.0));
-        float n_ = 0.142857142857;
-        vec3 ns = n_ * D.wyz - D.xzx;
-        vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
-        vec4 x_ = floor(j * ns.z);
-        vec4 y_ = floor(j - 7.0 * x_);
-        vec4 x = x_ * ns.x + ns.yyyy;
-        vec4 y = y_ * ns.x + ns.yyyy;
-        vec4 h = 1.0 - abs(x) - abs(y);
-        vec4 b0 = vec4(x.xy, y.xy);
-        vec4 b1 = vec4(x.zw, y.zw);
-        vec4 s0 = floor(b0)*2.0 + 1.0;
-        vec4 s1 = floor(b1)*2.0 + 1.0;
-        vec4 sh = -step(h, vec4(0.0));
-        vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
-        vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
-        vec3 p0 = vec3(a0.xy,h.x);
-        vec3 p1 = vec3(a0.zw,h.y);
-        vec3 p2 = vec3(a1.xy,h.z);
-        vec3 p3 = vec3(a1.zw,h.w);
-        vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
-        p0 *= norm.x;
-        p1 *= norm.y;
-        p2 *= norm.z;
-        p3 *= norm.w;
-        vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
-        m = m * m;
-        return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
-    }
+    ${simplexNoiseGLSL}
 
     void main() {
         vec3 target = position * uSpacing;
@@ -677,13 +732,6 @@ const targetArr = new Float32Array(PARTICLE_COUNT * 3);
 const randArr = new Float32Array(PARTICLE_COUNT);
 const sizeBiasArr = new Float32Array(PARTICLE_COUNT);
 
-for (let i = 0; i < PARTICLE_COUNT; i++) {
-    posArr[i * 3] = 0;
-    posArr[i * 3 + 1] = 0;
-    posArr[i * 3 + 2] = 0;
-    randArr[i] = Math.random();
-    sizeBiasArr[i] = Math.random();
-}
 geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
 geo.setAttribute('aTarget', new THREE.BufferAttribute(targetArr, 3));
 geo.setAttribute('aRandom', new THREE.BufferAttribute(randArr, 1));
@@ -711,7 +759,7 @@ const sharedUniforms = {
 
 const mat = new THREE.ShaderMaterial({
     uniforms: sharedUniforms,
-    vertexShader: vShader,
+    vertexShader: vShader.replace('${simplexNoiseGLSL}', simplexNoiseGLSL),
     fragmentShader: fShader,
     transparent: true,
     depthWrite: false,
@@ -729,7 +777,7 @@ sphereLineGeometry.setAttribute('position', new THREE.BufferAttribute(new Float3
 sphereLineGeometry.setAttribute('aRandom', new THREE.BufferAttribute(new Float32Array(0), 1));
 const sphereLineMaterial = new THREE.ShaderMaterial({
     uniforms: sharedUniforms,
-    vertexShader: lineVShader,
+    vertexShader: lineVShader.replace('${simplexNoiseGLSL}', simplexNoiseGLSL),
     fragmentShader: lineFShader,
     transparent: true,
     depthWrite: false,
@@ -740,10 +788,22 @@ sphereLines.visible = false;
 cosmicCluster.add(sphereLines);
 
 // ============================================
-// BACKGROUND BOKEH + GALAXY
+// LAZY BACKGROUND INITIALIZATION
 // ============================================
+let backgroundsLoaded = false;
+let bgPoints, bgPointsLarge, galaxyField, bgMat, bgMatLarge, galaxyMat;
 const bokehMaterials = [];
-const bgGeo = new THREE.BufferGeometry();
+const BASE_BOKEH_SIZE = 2.5;
+const LARGE_BOKEH_SIZE = BASE_BOKEH_SIZE * 2.25;
+const GALAXY_STAR_COUNT = 4000;
+const BASE_GALAXY_SIZE = 0.6;
+
+function loadBackgrounds() {
+    if (backgroundsLoaded) return;
+    backgroundsLoaded = true;
+    
+    // Background Bokeh
+    const bgGeo = new THREE.BufferGeometry();
 const bgPos = new Float32Array(CONFIG.particles.backgroundCount * 3);
 for (let i = 0; i < CONFIG.particles.backgroundCount; i++) {
     bgPos[i * 3] = (Math.random() - 0.5) * 100;
@@ -751,8 +811,7 @@ for (let i = 0; i < CONFIG.particles.backgroundCount; i++) {
     bgPos[i * 3 + 2] = (Math.random() - 0.5) * 50 - 20;
 }
 bgGeo.setAttribute('position', new THREE.BufferAttribute(bgPos, 3));
-const BASE_BOKEH_SIZE = 2.5;
-const bgMat = new THREE.PointsMaterial({
+bgMat = new THREE.PointsMaterial({
     color: new THREE.Color(CONFIG.controls.bokehColor.default),
     size: BASE_BOKEH_SIZE,
     map: particleTex,
@@ -762,10 +821,9 @@ const bgMat = new THREE.PointsMaterial({
     depthWrite: false
 });
 bokehMaterials.push(bgMat);
-const bgPoints = new THREE.Points(bgGeo, bgMat);
+bgPoints = new THREE.Points(bgGeo, bgMat);
 cosmicCluster.add(bgPoints);
 
-const LARGE_BOKEH_SIZE = BASE_BOKEH_SIZE * 2.25;
 const bgGeoLarge = new THREE.BufferGeometry();
 const largeCount = Math.floor(CONFIG.particles.backgroundCount * 0.35);
 const bgPosLarge = new Float32Array(largeCount * 3);
@@ -775,7 +833,7 @@ for (let i = 0; i < largeCount; i++) {
     bgPosLarge[i * 3 + 2] = (Math.random() - 0.5) * 70 - 30;
 }
 bgGeoLarge.setAttribute('position', new THREE.BufferAttribute(bgPosLarge, 3));
-const bgMatLarge = new THREE.PointsMaterial({
+bgMatLarge = new THREE.PointsMaterial({
     color: new THREE.Color(CONFIG.controls.bokehColor.default),
     size: LARGE_BOKEH_SIZE,
     map: particleTex,
@@ -785,10 +843,9 @@ const bgMatLarge = new THREE.PointsMaterial({
     depthWrite: false
 });
 bokehMaterials.push(bgMatLarge);
-const bgPointsLarge = new THREE.Points(bgGeoLarge, bgMatLarge);
+bgPointsLarge = new THREE.Points(bgGeoLarge, bgMatLarge);
 cosmicCluster.add(bgPointsLarge);
 
-const GALAXY_STAR_COUNT = 4000;
 const galaxyGeo = new THREE.BufferGeometry();
 const galaxyPositions = new Float32Array(GALAXY_STAR_COUNT * 3);
 const galaxyColors = new Float32Array(GALAXY_STAR_COUNT * 3);
@@ -809,18 +866,20 @@ for (let i = 0; i < GALAXY_STAR_COUNT; i++) {
 }
 galaxyGeo.setAttribute('position', new THREE.BufferAttribute(galaxyPositions, 3));
 galaxyGeo.setAttribute('color', new THREE.BufferAttribute(galaxyColors, 3));
-const BASE_GALAXY_SIZE = 3.5;
-const galaxyMat = new THREE.PointsMaterial({
+galaxyMat = new THREE.PointsMaterial({
     size: BASE_GALAXY_SIZE,
     map: particleTex,
     transparent: true,
-    opacity: 0.45,
-    vertexColors: true,
+    opacity: 0.7,
     blending: THREE.AdditiveBlending,
-    depthWrite: false
+    depthWrite: false,
+    vertexColors: true
 });
-const galaxyField = new THREE.Points(galaxyGeo, galaxyMat);
+galaxyField = new THREE.Points(galaxyGeo, galaxyMat);
 cosmicCluster.add(galaxyField);
+
+console.log('Backgrounds loaded lazily');
+}
 
 scene.background = null;
 
@@ -1211,6 +1270,14 @@ function setShape(type) {
     const spherePattern = useStructuredSphere ? getSpherePattern() : null;
     const novaPattern = useNova ? getNovaPattern() : null;
 
+    // Dispose old line geometry buffers before creating new ones
+    if (sphereLineGeometry.attributes.position) {
+        sphereLineGeometry.attributes.position.array = null;
+    }
+    if (sphereLineGeometry.attributes.aRandom) {
+        sphereLineGeometry.attributes.aRandom.array = null;
+    }
+
     for (let i = 0; i < PARTICLE_COUNT; i++) {
         let p;
         let sizeFactor = Math.random();
@@ -1352,45 +1419,34 @@ function initUIHandlers() {
     }
 
     // Gesture toggle button
-    document.getElementById('gesture-toggle').addEventListener('click', () => {
-        gestureDetectionEnabled = !gestureDetectionEnabled;
-        const btn = document.getElementById('gesture-toggle');
-        
-        if (gestureDetectionEnabled) {
-            btn.classList.remove('disabled');
-            btn.classList.add('enabled');
-            btn.innerHTML = '🖐️ Gestures: ON';
-            console.log('Gesture detection enabled');
-        } else {
-            btn.classList.remove('enabled');
-            btn.classList.add('disabled');
-            btn.innerHTML = '🚫 Gestures: OFF';
-            console.log('Gesture detection disabled');
-        }
-    });
-
-    document.querySelectorAll('[data-shape]').forEach(btn => {
-        btn.addEventListener('click', (event) => {
-            event.preventDefault();
-            const shape = btn.dataset.shape;
-            if (shape) {
-                setShape(shape);
+    if (domCache.gestureToggle) {
+        domCache.gestureToggle.addEventListener('click', () => {
+            gestureDetectionEnabled = !gestureDetectionEnabled;
+            
+            if (gestureDetectionEnabled) {
+                domCache.gestureToggle.classList.remove('disabled');
+                domCache.gestureToggle.classList.add('enabled');
+                domCache.gestureToggle.innerHTML = '🖐️ Gestures: ON';
+                console.log('Gesture detection enabled');
+            } else {
+                domCache.gestureToggle.classList.remove('enabled');
+                domCache.gestureToggle.classList.add('disabled');
+                domCache.gestureToggle.innerHTML = '🚫 Gestures: OFF';
+                console.log('Gesture detection disabled');
             }
         });
-    });
+    }
 }
 
 function initControlPanelToggle() {
-    const hud = document.getElementById('hud');
-    const toggleBtn = document.getElementById('controls-toggle');
-    if (!hud || !toggleBtn) return;
+    if (!domCache.hud || !domCache.controlsToggle) return;
 
     const updateToggleLabel = () => {
-        toggleBtn.innerText = hud.classList.contains('hidden') ? 'Show Controls' : 'Hide Controls';
+        domCache.controlsToggle.innerText = domCache.hud.classList.contains('hidden') ? 'Show Controls' : 'Hide Controls';
     };
 
-    toggleBtn.addEventListener('click', () => {
-        hud.classList.toggle('hidden');
+    domCache.controlsToggle.addEventListener('click', () => {
+        domCache.hud.classList.toggle('hidden');
         updateToggleLabel();
     });
 
@@ -1419,7 +1475,13 @@ function cacheLogElements() {
 
 function updateLog(key, value) {
     if (logElements[key]) {
-        logElements[key].innerText = value;
+        if ('requestIdleCallback' in window) {
+            requestIdleCallback(() => {
+                logElements[key].innerText = value;
+            }, { timeout: 100 });
+        } else {
+            logElements[key].innerText = value;
+        }
     }
 }
 
@@ -1429,6 +1491,7 @@ function filterLandmarks(landmarks, timestampMs) {
     return landmarks.map((hand, handIndex) => hand.map((landmark, landmarkIndex) => {
         const filtered = { ...landmark };
         ['x', 'y', 'z'].forEach(axis => {
+            // Use reduced filter key - share filters across similar landmarks
             const key = `${handIndex}-${landmarkIndex}-${axis}`;
             if (!landmarkFilterBank.has(key)) {
                 landmarkFilterBank.set(
@@ -1445,6 +1508,14 @@ function filterLandmarks(landmarks, timestampMs) {
         });
         return filtered;
     }));
+}
+
+// Clear unused filters when hands disappear
+function clearUnusedFilters(activeHandCount) {
+    if (activeHandCount === 0 && landmarkFilterBank.size > 0) {
+        landmarkFilterBank.clear();
+        fingerVelocityHistory.clear();
+    }
 }
 
 function updateGestureFeedback(label, confidence = 0) {
@@ -1602,6 +1673,12 @@ function detectHands() {
 
     const now = performance.now();
 
+    // Skip detection if page is not visible
+    if (!isPageVisible) {
+        requestAnimationFrame(detectHands);
+        return;
+    }
+
     // Throttle hand detection to configured FPS
     if (video.currentTime !== lastVideoTime && (now - lastDetectionTime) >= detectionInterval) {
         lastVideoTime = video.currentTime;
@@ -1626,6 +1703,13 @@ function drawHandLandmarks(result) {
 
     handCtx.save();
     handCtx.clearRect(0, 0, handCanvas.width, handCanvas.height);
+    
+    // Only draw if hands are detected
+    if (!result.landmarks || result.landmarks.length === 0) {
+        handCtx.restore();
+        return;
+    }
+    
     handCtx.font = '12px Rajdhani, sans-serif';
     handCtx.textBaseline = 'middle';
 
@@ -1800,13 +1884,15 @@ function detectPeaceSign(hand) {
 function detectFist(hand) {
     const palm = hand[9];
     const tips = [4, 8, 12, 16, 20];
-    const threshold = Math.max(0.04, 0.55 * getHandScale(hand));
+    const threshold = Math.max(0.04, 0.55 * memoCache.getHandScale(hand, memoCache.frameId));
 
     let closedCount = 0;
-    tips.forEach(t => {
+    const tipsLen = tips.length;
+    for (let i = 0; i < tipsLen; i++) {
+        const t = tips[i];
         const dist = Math.hypot(hand[t].x - palm.x, hand[t].y - palm.y);
         if (dist < threshold) closedCount++;
-    });
+    }
 
     return closedCount >= 4;
 }
@@ -1833,23 +1919,27 @@ function aggregateHandData(hands) {
         return aggregate;
     }
 
-    hands.forEach(hand => {
+    const handsLen = hands.length;
+    for (let h = 0; h < handsLen; h++) {
+        const hand = hands[h];
         const wrist = hand[0];
         let tipDist = 0;
 
-        fingerTipIndices.forEach(index => {
+        const tipsLen = fingerTipIndices.length;
+        for (let i = 0; i < tipsLen; i++) {
+            const index = fingerTipIndices[i];
             const tip = hand[index];
             const distance = Math.hypot(tip.x - wrist.x, tip.y - wrist.y);
             tipDist += distance;
             aggregate.tipPositions.push({ x: tip.x, y: tip.y });
-        });
+        }
 
-        aggregate.openness += tipDist / fingerTipIndices.length;
+        aggregate.openness += tipDist / tipsLen;
         aggregate.avgHandSize += Math.hypot(hand[12].x - wrist.x, hand[12].y - wrist.y);
         const direction = getHandDirection(hand);
         aggregate.direction.x += direction.x;
         aggregate.direction.y += direction.y;
-    });
+    }
 
     const invCount = 1 / hands.length;
     aggregate.openness *= invCount;
@@ -1883,16 +1973,24 @@ function applyDirectionalWind(direction, magnitude, target) {
 }
 
 function applyFingerForceFields(hands, deltaTime) {
-    const force = new THREE.Vector3();
+    const force = vector3Pool.get();
     if (!hands || !hands.length) {
         fingerVelocityHistory.clear();
-        return force;
+        const result = force.clone();
+        vector3Pool.release(force);
+        return result;
     }
 
     const dt = Math.max(deltaTime, 0.016);
-    hands.forEach((hand, handIndex) => {
+    const handsLen = hands.length;
+    for (let h = 0; h < handsLen; h++) {
+        const hand = hands[h];
+        const handIndex = h;
         const fingerTipIndices = [8, 12, 16, 20];
-        fingerTipIndices.forEach(tipIndex => {
+        const tipsLen = fingerTipIndices.length;
+        
+        for (let i = 0; i < tipsLen; i++) {
+            const tipIndex = fingerTipIndices[i];
             const tip = hand[tipIndex];
             const key = `${handIndex}-${tipIndex}`;
             const prev = fingerVelocityHistory.get(key);
@@ -1903,10 +2001,13 @@ function applyFingerForceFields(hands, deltaTime) {
                 force.y -= vy;
             }
             fingerVelocityHistory.set(key, { x: tip.x, y: tip.y, z: tip.z || 0 });
-        });
-    });
+        }
+    }
 
-    return force.multiplyScalar(6.5);
+    force.multiplyScalar(6.5);
+    const result = force.clone();
+    vector3Pool.release(force);
+    return result;
 }
 
 function detectSwipe(hand) {
@@ -1973,11 +2074,17 @@ function processGestures(result) {
     const deltaTime = Math.max(0.001, (now - lastGestureSampleTime) / 1000);
     lastGestureSampleTime = now;
     let rotationGestureActive = false;
+    
+    // Update memoization frame
+    memoCache.nextFrame();
 
     updateLog('hands', hands.length);
+    
+    // Clear filters when no hands are detected
+    clearUnusedFilters(hands.length);
 
     let targetAttractorStrength = 0.0;
-    let targetWindForce = new THREE.Vector3(0, 0, 0);
+    let targetWindForce = vector3Pool.get();
     let targetPulse = 0.0;
     currentGesture = 'None';
 
@@ -2179,6 +2286,9 @@ function processGestures(result) {
         0.05 + movement * 0.01 + smoothedPulse * 0.05 + smoothedWindForce.length() * 0.02
     );
     commitGestureState(currentGesture, gestureEnergy);
+    
+    // Release pooled vector
+    vector3Pool.release(targetWindForce);
 }
 
 // ============================================
@@ -2189,6 +2299,14 @@ const clock = new THREE.Clock();
 function animate() {
     requestAnimationFrame(animate);
     const delta = clock.getDelta();
+    
+    // Lazy load backgrounds after first render
+    if (!backgroundsLoaded) {
+        loadBackgrounds();
+    }
+    
+    // Clear memoization cache periodically
+    memoCache.clearFrame();
 
     // Freeze time effect
     mat.uniforms.uFreezeTime.value += (freezeTimeTarget - mat.uniforms.uFreezeTime.value) * CONFIG.physics.smoothingFactor;
@@ -2308,25 +2426,46 @@ function animate() {
     const rotationDelta = delta * smoothedRotationSpeed * mat.uniforms.uFreezeTime.value;
     cosmicRotation += rotationDelta;
     cosmicCluster.rotation.y = cosmicRotation;
-    bgPoints.rotation.y = -cosmicRotation * 0.3;
-    galaxyField.rotation.y = -cosmicRotation * 0.5;
-    galaxyField.rotation.x = THREE.MathUtils.lerp(
-        galaxyField.rotation.x,
-        Math.sin(clock.elapsedTime * 0.05) * 0.1,
-        0.05
-    );
+    
+    if (backgroundsLoaded) {
+        bgPoints.rotation.y = -cosmicRotation * 0.3;
+        galaxyField.rotation.y = -cosmicRotation * 0.5;
+        galaxyField.rotation.x = THREE.MathUtils.lerp(
+            galaxyField.rotation.x,
+            Math.sin(clock.elapsedTime * 0.05) * 0.1,
+            0.05
+        );
+    }
+    
     composer.render();
 }
 
 // ============================================
-// WINDOW RESIZE HANDLER
+// WINDOW RESIZE HANDLER (DEBOUNCED)
 // ============================================
+let resizeTimeout;
 window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    composer.setSize(window.innerWidth, window.innerHeight);
-    updateHandCanvasSize();
+    clearTimeout(resizeTimeout);
+    resizeTimeout = setTimeout(() => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        composer.setSize(window.innerWidth, window.innerHeight);
+        updateHandCanvasSize();
+    }, 200);
+});
+
+// ============================================
+// PAGE VISIBILITY API - Pause when hidden
+// ============================================
+let isPageVisible = true;
+document.addEventListener('visibilitychange', () => {
+    isPageVisible = !document.hidden;
+    if (isPageVisible) {
+        console.log('Page visible - resuming');
+    } else {
+        console.log('Page hidden - pausing hand detection');
+    }
 });
 
 // ============================================
@@ -2356,18 +2495,21 @@ window.addEventListener('beforeunload', () => {
 // INITIALIZATION
 // ============================================
 function init() {
-    // Initialize DOM element references
-    video = document.getElementById('input-video');
-    cameraFeed = document.getElementById('camera-feed');
-    handCanvas = document.getElementById('hand-canvas');
-    handCtx = handCanvas.getContext('2d');
-    loader = document.getElementById('loader');
-    startBtn = document.getElementById('start-btn');
-    wiggleVal = document.getElementById('wiggle-val');
-    depthVal = document.getElementById('depth-val');
-    gestureFeedbackEl = document.getElementById('gesture-feedback');
-    gestureFeedbackLabel = document.getElementById('gesture-label');
-    gestureFeedbackBar = document.getElementById('gesture-meter-fill');
+    // Initialize DOM cache first
+    domCache.init();
+    
+    // Initialize DOM element references (legacy support)
+    video = domCache.video;
+    cameraFeed = domCache.cameraFeed;
+    handCanvas = domCache.handCanvas;
+    handCtx = domCache.handCtx;
+    loader = domCache.loader;
+    startBtn = domCache.startBtn;
+    wiggleVal = domCache.wiggleVal;
+    depthVal = domCache.depthVal;
+    gestureFeedbackEl = domCache.gestureFeedbackEl;
+    gestureFeedbackLabel = domCache.gestureFeedbackLabel;
+    gestureFeedbackBar = domCache.gestureFeedbackBar;
     updateHandCanvasSize();
     cacheLogElements();
     updateGestureFeedback('Initializing', 0.2);
@@ -2389,10 +2531,3 @@ if (document.readyState === 'loading') {
 } else {
     init();
 }
-    const colorPicker = document.getElementById('particle-color');
-    if (colorPicker) {
-        colorPicker.value = CONFIG.controls.color.default;
-        colorPicker.addEventListener('input', (e) => {
-            setParticleColor(e.target.value);
-        });
-    }
