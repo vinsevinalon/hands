@@ -11,33 +11,63 @@
         body {
             margin: 0;
             overflow: hidden;
-            background: #000510;
             font-family: 'Rajdhani', sans-serif;
+            background: #000;
         }
 
         canvas {
             display: block;
         }
 
+        #camera-background {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            z-index: 0;
+        }
+
+        #camera-background {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            z-index: 0;
+            background: #000;
+        }
+
+        #camera-background video {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #000;
+            filter: saturate(0.8);
+        }
+*** End Patch
+
         #input-video {
             position: absolute;
-            top: 20px;
-            right: 20px;
-            width: 320px;
-            height: 240px;
-            border: 2px solid rgba(0, 170, 255, 0.5);
-            border-radius: 10px;
-            z-index: 5;
-            box-shadow: 0 0 20px rgba(0, 170, 255, 0.3);
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            pointer-events: none;
         }
 
         #hand-canvas {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            width: 320px;
-            height: 240px;
-            z-index: 6;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 3;
             pointer-events: none;
         }
 
@@ -61,14 +91,6 @@
 
         /* Mobile Responsiveness */
         @media (max-width: 768px) {
-            #input-video,
-            #hand-canvas {
-                width: 160px;
-                height: 120px;
-                top: 10px;
-                right: 10px;
-            }
-
             #gesture-log {
                 display: none; /* Hide on mobile for better performance */
             }
@@ -76,7 +98,7 @@
             #hud {
                 width: 98%;
                 max-width: none;
-                bottom: 10px;
+                bottom: 80px;
             }
 
             .hud-row {
@@ -88,6 +110,7 @@
                 padding: 10px 15px;
                 flex-wrap: wrap;
                 justify-content: center;
+                flex: 1 1 auto;
             }
 
             .btn {
@@ -110,6 +133,13 @@
 
             .stat-value {
                 font-size: 16px;
+            }
+
+            .controls-toggle {
+                top: auto;
+                bottom: 20px;
+                left: 50%;
+                transform: translateX(-50%);
             }
         }
 
@@ -184,7 +214,7 @@
             position: absolute;
             bottom: 30px;
             left: 50%;
-            transform: translateX(-50%);
+            transform: translate(-50%, 0);
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -193,13 +223,23 @@
             width: 95%;
             max-width: 900px;
             pointer-events: none;
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+
+        #hud.hidden {
+            opacity: 0;
+            transform: translate(-50%, 60px);
+            pointer-events: none;
         }
 
         .hud-row {
             display: flex;
             gap: 20px;
             pointer-events: auto;
-            align-items: center;
+            align-items: stretch;
+            flex-wrap: wrap;
+            justify-content: center;
+            width: 100%;
         }
 
         .panel {
@@ -212,6 +252,32 @@
             display: flex;
             gap: 15px;
             align-items: center;
+            flex: 1 1 240px;
+            flex-wrap: wrap;
+            justify-content: center;
+            pointer-events: auto;
+        }
+
+        .controls-toggle {
+            position: absolute;
+            top: 160px;
+            left: 20px;
+            z-index: 12;
+            background: rgba(5, 15, 30, 0.85);
+            color: #e0f6ff;
+            border: 1px solid rgba(0, 200, 255, 0.4);
+            border-radius: 12px;
+            padding: 8px 16px;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .controls-toggle:hover {
+            box-shadow: 0 0 12px rgba(0, 200, 255, 0.4);
         }
 
         .btn {
@@ -266,6 +332,7 @@
             flex-direction: column;
             gap: 5px;
             min-width: 120px;
+            flex: 1 1 150px;
         }
 
         .slider-label {
@@ -273,6 +340,27 @@
             color: #00aaff;
             letter-spacing: 2px;
             text-transform: uppercase;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .slider-value {
+            font-size: 11px;
+            color: #ffffff;
+            letter-spacing: 1px;
+        }
+
+        input[type=color] {
+            width: 44px;
+            height: 28px;
+            padding: 0;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            cursor: pointer;
+            box-shadow: 0 0 12px rgba(0, 180, 255, 0.35);
         }
 
         input[type=range] {
@@ -359,6 +447,10 @@
 </head>
 
 <body>
+    <div id="camera-background">
+        <video id="camera-feed" autoplay playsinline muted></video>
+    </div>
+    <div id="camera-overlay"></div>
     <div id="error-log"></div>
     <video id="input-video" playsinline autoplay></video>
     <canvas id="hand-canvas"></canvas>
@@ -381,6 +473,7 @@
             <div id="gesture-meter-fill"></div>
         </div>
     </div>
+    <button id="controls-toggle" class="controls-toggle">Hide Controls</button>
     <div id="loader">Initializing...</div>
     <button id="start-btn"
         style="position:absolute; top:60%; left:50%; transform:translate(-50%, -50%); padding:15px 30px; background:#00aaff; border:none; color:white; font-family:'Rajdhani'; font-size:18px; cursor:pointer; display:none; z-index:100;">START
@@ -401,26 +494,56 @@
         <div class="hud-row">
             <div class="panel">
                 <div class="slider-group">
-                    <label class="slider-label">Glow Intensity</label>
+                    <label class="slider-label">Glow Intensity <span class="slider-value" id="glow-value">2.0</span></label>
                     <input type="range" id="glow-slider" min="0" max="4" step="0.1" value="2.0">
                 </div>
                 <div class="slider-group">
-                    <label class="slider-label">Particle Size</label>
+                    <label class="slider-label">Global Particle Size <span class="slider-value" id="size-value">7.0</span></label>
                     <input type="range" id="size-slider" min="1" max="10" step="0.1" value="7.0">
                 </div>
+                <div class="slider-group">
+                    <label class="slider-label">Particle Color <span class="slider-value" id="color-value">#5EF3FF</span></label>
+                    <input type="color" id="particle-color" value="#5ef3ff">
+                </div>
             </div>
+            <div class="panel">
+                <div class="slider-group">
+                    <label class="slider-label">Particle Density <span class="slider-value" id="density-value">1.00</span></label>
+                    <input type="range" id="density-slider" min="0" max="1" step="0.01" value="1.0">
+                </div>
+                <div class="slider-group">
+                    <label class="slider-label">Particle Spacing <span class="slider-value" id="spacing-value">1.00</span></label>
+                    <input type="range" id="spacing-slider" min="0.3" max="4" step="0.1" value="1.0">
+                </div>
+                <div class="slider-group">
+                    <label class="slider-label">Halo Star Size <span class="slider-value" id="halo-value">1.00</span></label>
+                    <input type="range" id="halo-slider" min="0.3" max="2.5" step="0.05" value="1.0">
+                </div>
+                <div class="slider-group">
+                    <label class="slider-label">Bokeh Color <span class="slider-value" id="bokeh-color-value">#1A6BFF</span></label>
+                    <input type="color" id="bokeh-color" value="#1a6bff">
+                </div>
+            </div>
+        </div>
 
+        <div class="hud-row">
+            <div class="panel">
+                <div class="slider-group">
+                    <label class="slider-label">Dot Min Scale <span class="slider-value" id="dot-min-value">1.00</span></label>
+                    <input type="range" id="dot-min-slider" min="0.4" max="2.0" step="0.05" value="1.0">
+                </div>
+                <div class="slider-group">
+                    <label class="slider-label">Dot Max Scale <span class="slider-value" id="dot-max-value">2.50</span></label>
+                    <input type="range" id="dot-max-slider" min="1" max="5" step="0.05" value="2.5">
+                </div>
+            </div>
             <div class="panel">
                 <button class="btn toggle-btn enabled" id="gesture-toggle">🖐️ Gestures: ON</button>
             </div>
 
             <div class="panel">
-                <button class="btn active" onclick="setShape('sphere')">Sphere</button>
-                <button class="btn" onclick="setShape('heart')">Heart</button>
-                <button class="btn" onclick="setShape('saturn')">Saturn</button>
-                <button class="btn" onclick="setShape('flower')">Nebula</button>
-                <button class="btn" onclick="setShape('buddha')">Entity</button>
-                <button class="btn" onclick="setShape('fireworks')">Nova</button>
+                <button class="btn active" data-shape="sphere">Sphere</button>
+                <button class="btn" data-shape="fireworks">Nova</button>
             </div>
         </div>
     </div>
@@ -438,3 +561,13 @@
 </body>
 
 </html>
+        #camera-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(5, 10, 25, 0.28);
+            z-index: 1;
+            pointer-events: none;
+        }

@@ -22,7 +22,7 @@ const CONFIG = {
             if (navigator.hardwareConcurrency >= 8) return 40000;
             return 25000;
         },
-        backgroundCount: 200,
+        backgroundCount: 450,
         defaultSize: 7.0,
     },
     rendering: {
@@ -78,6 +78,85 @@ const CONFIG = {
         minRotationVelocity: 0.15,
         rotationIdleDecay: 0.15,
     },
+    controls: {
+        glow: {
+            sliderMin: 0.0,
+            sliderMax: 4.0,
+            default: 2.0,
+            step: 0.1,
+            displayPrecision: 2,
+            smoothing: 0.08,
+            gamma: 1.35,
+            strengthMin: 0.25,
+            strengthMax: 3.5,
+            radiusMin: 0.2,
+            radiusMax: 0.85,
+            thresholdMin: 0.2,
+            thresholdMax: 0.85
+        },
+        size: {
+            sliderMin: 1.0,
+            sliderMax: 10.0,
+            default: 7.0,
+            step: 0.1,
+            displayPrecision: 2,
+            smoothing: 0.1,
+            gamma: 1.15,
+            baseMin: 2.5,
+            baseMax: 9.5
+        },
+        density: {
+            sliderMin: 0.0,
+            sliderMax: 1.0,
+            default: 1.0,
+            step: 0.01,
+            displayPrecision: 2,
+            smoothing: 0.12,
+            gamma: 0.85,
+            minFactor: 0.02,
+            maxFactor: 1.0
+        },
+        spacing: {
+            sliderMin: 0.3,
+            sliderMax: 4.0,
+            default: 1.0,
+            step: 0.1,
+            displayPrecision: 2,
+            smoothing: 0.12,
+            gamma: 0.75
+        },
+        dotSize: {
+            smoothing: 0.12,
+            min: {
+                sliderMin: 0.4,
+                sliderMax: 2.0,
+                default: 1.0,
+                step: 0.05,
+                displayPrecision: 2
+            },
+            max: {
+                sliderMin: 1.0,
+                sliderMax: 5.0,
+                default: 2.5,
+                step: 0.05,
+                displayPrecision: 2
+            }
+        },
+        halo: {
+            sliderMin: 0.3,
+            sliderMax: 2.5,
+            default: 1.0,
+            step: 0.05,
+            displayPrecision: 2,
+            smoothing: 0.1
+        },
+        bokehColor: {
+            default: '#1a6bff'
+        },
+        color: {
+            default: '#5ef3ff'
+        }
+    }
 };
 
 // ============================================
@@ -96,13 +175,24 @@ camera.position.z = CONFIG.camera.positionZ;
 
 const renderer = new THREE.WebGLRenderer({
     antialias: CONFIG.rendering.antialias,
-    powerPreference: CONFIG.rendering.powerPreference
+    powerPreference: CONFIG.rendering.powerPreference,
+    alpha: true
 });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(CONFIG.rendering.pixelRatio);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = CONFIG.rendering.toneMappingExposure;
+renderer.setClearColor(0x000000, 0);
 document.body.appendChild(renderer.domElement);
+Object.assign(renderer.domElement.style, {
+    position: 'fixed',
+    top: '0',
+    left: '0',
+    width: '100vw',
+    height: '100vh',
+    zIndex: '2',
+    pointerEvents: 'none'
+});
 
 // ============================================
 // POST PROCESSING
@@ -140,17 +230,41 @@ function createParticleTexture() {
 const particleTex = createParticleTexture();
 
 const galaxyPalette = [
-    new THREE.Color(0x6ddcff),
-    new THREE.Color(0xb892ff),
-    new THREE.Color(0xffd6a5),
-    new THREE.Color(0x80ffea),
-    new THREE.Color(0xa7c7ff)
+    new THREE.Color(0x5ef3ff),
+    new THREE.Color(0x3895ff),
+    new THREE.Color(0x8ab6ff),
+    new THREE.Color(0x6fe1ff),
+    new THREE.Color(0x9ddcff)
 ];
 
-function getGalaxyColor() {
-    const base = galaxyPalette[Math.floor(Math.random() * galaxyPalette.length)].clone();
-    const intensity = 0.6 + Math.random() * 0.5;
-    return base.multiplyScalar(intensity);
+const COLOR_CURVE = [
+    { stop: 0.0, color: new THREE.Color(0xa0f6ff) },
+    { stop: 0.3, color: new THREE.Color(0x73bfff) },
+    { stop: 0.6, color: new THREE.Color(0x3f7cff) },
+    { stop: 1.0, color: new THREE.Color(0x1e42ff) }
+];
+
+function getColorByBias(bias) {
+    const clamped = THREE.MathUtils.clamp(bias, 0, 1);
+    for (let i = 0; i < COLOR_CURVE.length - 1; i++) {
+        const current = COLOR_CURVE[i];
+        const next = COLOR_CURVE[i + 1];
+        if (clamped >= current.stop && clamped <= next.stop) {
+            const t = (clamped - current.stop) / (next.stop - current.stop);
+            return current.color.clone().lerp(next.color, t);
+        }
+    }
+    return COLOR_CURVE[COLOR_CURVE.length - 1].color.clone();
+}
+
+function accelColor(color, amount) {
+    return color.clone().multiplyScalar(amount);
+}
+
+function getGalaxyColor(bias = Math.random()) {
+    const primary = galaxyPalette[Math.floor(Math.random() * galaxyPalette.length)].clone();
+    const accent = getColorByBias(bias);
+    return primary.multiply(accelColor(accent, 0.5 + Math.random() * 0.5));
 }
 
 class LowPassFilter {
@@ -209,6 +323,69 @@ class OneEuroFilter {
 const landmarkFilterBank = new Map();
 const fingerVelocityHistory = new Map();
 const gestureState = { active: 'Auto Mode', confidence: 0.4 };
+const controlState = {
+    glow: {
+        value: CONFIG.controls.glow.default,
+        target: CONFIG.controls.glow.default
+    },
+    size: {
+        value: CONFIG.controls.size.default,
+        target: CONFIG.controls.size.default
+    },
+    density: {
+        value: CONFIG.controls.density.default,
+        target: CONFIG.controls.density.default
+    },
+    spacing: {
+        value: CONFIG.controls.spacing.default,
+        target: CONFIG.controls.spacing.default
+    },
+    dotMin: {
+        value: CONFIG.controls.dotSize.min.default,
+        target: CONFIG.controls.dotSize.min.default
+    },
+    dotMax: {
+        value: CONFIG.controls.dotSize.max.default,
+        target: CONFIG.controls.dotSize.max.default
+    },
+    halo: {
+        value: CONFIG.controls.halo.default,
+        target: CONFIG.controls.halo.default
+    }
+};
+const particleColor = new THREE.Color(CONFIG.controls.color.default);
+const bokehColor = new THREE.Color(CONFIG.controls.bokehColor.default);
+
+function setParticleColor(hexValue) {
+    if (!hexValue) return;
+    try {
+        particleColor.set(hexValue);
+        sharedUniforms.uBaseColor.value.copy(particleColor);
+        const display = document.getElementById('color-value');
+        if (display) {
+            display.innerText = hexValue.toUpperCase();
+        }
+    } catch (e) {
+        console.warn('Invalid color value', hexValue, e);
+    }
+}
+
+function setBokehColor(hexValue) {
+    if (!hexValue) return;
+    try {
+        bokehColor.set(hexValue);
+        bokehMaterials.forEach(mat => {
+            mat.color.copy(bokehColor);
+            mat.needsUpdate = true;
+        });
+        const display = document.getElementById('bokeh-color-value');
+        if (display) {
+            display.innerText = hexValue.toUpperCase();
+        }
+    } catch (err) {
+        console.warn('Invalid bokeh color', hexValue, err);
+    }
+}
 
 // ============================================
 // SHADERS
@@ -220,17 +397,24 @@ const vShader = `
     uniform float uWiggle;
     uniform float uExplosion;
     uniform float uMaxSize;
+    uniform float uDotSizeMin;
+    uniform float uDotSizeMax;
+    uniform float uSpacing;
     uniform vec3 uAttractorPos;
     uniform float uAttractorStrength;
     uniform vec3 uWindForce;
     uniform float uFreezeTime;
     uniform float uPulse;
+    uniform vec3 uBaseColor;
+    uniform float uFlow;
 
     attribute vec3 aTarget;
     attribute float aRandom;
+    attribute float aSizeBias;
 
     varying vec3 vPos;
     varying float vAlpha;
+    varying float vGlow;
 
     // Simplex noise function
     vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
@@ -285,18 +469,22 @@ const vShader = `
     }
 
     void main() {
-        vec3 target = aTarget;
+        vec3 target = aTarget * uSpacing;
+        float flow = clamp(uFlow, 0.0, 2.0);
 
         // 1. Wiggle Effect (High freq noise)
-        float wiggleNoise = snoise(vec3(target.x * 0.5, target.y * 0.5, uTime * 10.0));
-        target += wiggleNoise * uWiggle * 2.0;
+        float wiggleNoise = snoise(vec3(target.x * 0.45, target.y * 0.45, uTime * 5.0 + aRandom * 6.0));
+        float wigglePower = (0.2 + flow * 0.6) * uWiggle;
+        target += wiggleNoise * wigglePower;
 
         // 2. Base Noise Movement
-        float n = snoise(vec3(target.x * 0.1, target.y * 0.1, uTime * 0.3));
-        target += n * 0.5;
+        float n = snoise(vec3(target.x * 0.08, target.y * 0.08, uTime * 0.25));
+        float baseNoise = mix(0.05, 0.55, clamp(flow * 0.5, 0.0, 1.0));
+        target += n * baseNoise;
 
         // 3. Swirl Effect
-        float angle = uSwirl * length(target.xz) * 0.1;
+        float swirlAmount = uSwirl * (0.25 + flow * 0.5);
+        float angle = swirlAmount * length(target.xz) * 0.08;
         float s = sin(angle);
         float c = cos(angle);
         mat2 rot = mat2(c, -s, s, c);
@@ -304,7 +492,8 @@ const vShader = `
 
         // 4. Explosion (Distance from camera)
         vec3 dir = normalize(target);
-        target += dir * uExplosion * 20.0 * aRandom;
+        float explosionFactor = mix(6.0, 20.0, clamp(flow * 0.6, 0.0, 1.0));
+        target += dir * uExplosion * explosionFactor * (0.3 + 0.7 * aRandom);
 
         // 5. Expansion (Hand Open/Close)
         vec3 pos = mix(vec3(0.0), target, uExpansion);
@@ -317,40 +506,163 @@ const vShader = `
         }
 
         // 7. Wind Force (Hand Direction)
-        pos += uWindForce * aRandom * 0.5;
+        float windScale = 0.2 + flow * 0.6;
+        pos += uWindForce * (aRandom * 0.4 + windScale);
 
         // 8. Pulse Effect (Peace Sign)
-        pos *= (1.0 + uPulse * sin(uTime * 5.0 + aRandom * 10.0) * 0.3);
+        pos *= (1.0 + uPulse * sin(uTime * 4.5 + aRandom * 10.0) * (0.25 + flow * 0.2));
 
         vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
         gl_Position = projectionMatrix * mvPos;
 
         // Size with pulse
-        float sizeMultiplier = 1.0 + uPulse * 0.5;
-        gl_PointSize = (uMaxSize + aRandom * 3.0) * (1.0 / -mvPos.z) * sizeMultiplier;
+        float sizeMultiplier = 1.0 + uPulse * 1.5 + flow * 0.35;
+        float perParticleSize = mix(uDotSizeMin, uDotSizeMax, clamp(aSizeBias, 0.0, 1.0));
+        float finalSize = uMaxSize * perParticleSize;
+        gl_PointSize = finalSize * (1.0 / -mvPos.z) * sizeMultiplier;
 
         vPos = pos;
-        vAlpha = 0.5 + 0.5 * n;
+        vAlpha = 0.4 + 0.6 * smoothstep(-1.0, 1.0, n);
+        float radial = clamp(length(pos) / (40.0 * max(uSpacing, 0.2)), 0.0, 1.0);
+        vGlow = (1.0 - radial) * (0.4 + flow * 0.3);
     }
 `;
 
 const fShader = `
     uniform sampler2D uTex;
+    uniform float uFlow;
+    uniform vec3 uBaseColor;
     varying vec3 vPos;
     varying float vAlpha;
+    varying float vGlow;
 
     void main() {
         vec4 tex = texture2D(uTex, gl_PointCoord);
         if (tex.a < 0.05) discard;
 
         float dist = length(vPos);
-        vec3 colorCore = vec3(1.0, 0.7, 0.1); // Gold
-        vec3 colorEdge = vec3(0.0, 0.5, 1.0); // Cyan Blue
+        float mixFactor = smoothstep(0.0, 18.0, dist);
+        vec3 deepTone = uBaseColor * vec3(0.15, 0.2, 0.35);
+        vec3 midTone = uBaseColor * 0.8 + vec3(0.05, 0.1, 0.2);
+        vec3 highlight = normalize(uBaseColor + vec3(0.4, 0.6, 0.9));
+        vec3 glowColor = mix(midTone, deepTone, mixFactor);
+        glowColor = mix(glowColor, highlight, vGlow * (0.5 + mixFactor * 0.5));
+        float energy = clamp(uFlow, 0.0, 2.0);
+        glowColor *= 1.0 + energy * 0.35;
 
-        float mixFactor = smoothstep(0.0, 15.0, dist);
-        vec3 finalColor = mix(colorCore, colorEdge, mixFactor);
+        float alpha = tex.a * vAlpha * (0.65 + vGlow * 0.4 + energy * 0.2);
+        gl_FragColor = vec4(glowColor, alpha);
+    }
+`;
 
-        gl_FragColor = vec4(finalColor * 2.0, tex.a * vAlpha);
+const lineVShader = `
+    uniform float uTime;
+    uniform float uExpansion;
+    uniform float uSwirl;
+    uniform float uWiggle;
+    uniform float uExplosion;
+    uniform float uSpacing;
+    uniform vec3 uAttractorPos;
+    uniform float uAttractorStrength;
+    uniform vec3 uWindForce;
+    uniform float uPulse;
+    uniform float uFlow;
+
+    attribute float aRandom;
+
+    varying float vLineAlpha;
+    varying float vLineGlow;
+
+    vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+    vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+    vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+    vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+    float snoise(vec3 v) {
+        const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+        const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+        vec3 i = floor(v + dot(v, C.yyy));
+        vec3 x0 = v - i + dot(i, C.xxx);
+        vec3 g = step(x0.yzx, x0.xyz);
+        vec3 l = 1.0 - g;
+        vec3 i1 = min(g.xyz, l.zxy);
+        vec3 i2 = max(g.xyz, l.zxy);
+        vec3 x1 = x0 - i1 + C.xxx;
+        vec3 x2 = x0 - i2 + C.yyy;
+        vec3 x3 = x0 - D.yyy;
+        i = mod289(i);
+        vec4 p = permute(permute(permute(
+                i.z + vec4(0.0, i1.z, i2.z, 1.0))
+                + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+                + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+        float n_ = 0.142857142857;
+        vec3 ns = n_ * D.wyz - D.xzx;
+        vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+        vec4 x_ = floor(j * ns.z);
+        vec4 y_ = floor(j - 7.0 * x_);
+        vec4 x = x_ * ns.x + ns.yyyy;
+        vec4 y = y_ * ns.x + ns.yyyy;
+        vec4 h = 1.0 - abs(x) - abs(y);
+        vec4 b0 = vec4(x.xy, y.xy);
+        vec4 b1 = vec4(x.zw, y.zw);
+        vec4 s0 = floor(b0)*2.0 + 1.0;
+        vec4 s1 = floor(b1)*2.0 + 1.0;
+        vec4 sh = -step(h, vec4(0.0));
+        vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+        vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+        vec3 p0 = vec3(a0.xy,h.x);
+        vec3 p1 = vec3(a0.zw,h.y);
+        vec3 p2 = vec3(a1.xy,h.z);
+        vec3 p3 = vec3(a1.zw,h.w);
+        vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+        p0 *= norm.x;
+        p1 *= norm.y;
+        p2 *= norm.z;
+        p3 *= norm.w;
+        vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+        m = m * m;
+        return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+    }
+
+    void main() {
+        vec3 target = position * uSpacing;
+        float flow = clamp(uFlow, 0.0, 2.0);
+        float wiggleNoise = snoise(vec3(target.x * 0.2, target.y * 0.2, uTime * 3.5 + aRandom * 4.0));
+        target += wiggleNoise * uWiggle * (0.4 + flow * 0.4);
+        float n = snoise(vec3(target.x * 0.06, target.y * 0.06, uTime * 0.18));
+        target += n * (0.15 + flow * 0.15);
+        float angle = uSwirl * (0.15 + flow * 0.35) * length(target.xz) * 0.08;
+        float s = sin(angle);
+        float c = cos(angle);
+        mat2 rot = mat2(c, -s, s, c);
+        target.xz = rot * target.xz;
+        vec3 dir = normalize(target + vec3(aRandom * 0.3));
+        target += dir * uExplosion * (10.0 + flow * 10.0) * (0.25 + 0.75 * aRandom);
+        vec3 pos = mix(vec3(0.0), target, uExpansion);
+        if (uAttractorStrength > 0.0) {
+            vec3 toAttractor = uAttractorPos - pos;
+            float dist = length(toAttractor);
+            pos += normalize(toAttractor) * uAttractorStrength * (1.0 / (dist + 1.0)) * 2.5;
+        }
+        pos += uWindForce * (0.2 + flow * 0.6);
+        pos *= (1.0 + uPulse * (0.1 + flow * 0.1));
+        vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
+        gl_Position = projectionMatrix * mvPos;
+        float heightFade = smoothstep(-20.0, 20.0, pos.y);
+        vLineAlpha = (0.35 + 0.45 * heightFade) * (0.7 + flow * 0.3);
+        vLineGlow = heightFade;
+    }
+`;
+
+const lineFShader = `
+    uniform float uFlow;
+    uniform vec3 uBaseColor;
+    varying float vLineAlpha;
+    varying float vLineGlow;
+    void main() {
+        float energy = clamp(uFlow, 0.0, 2.0);
+        vec3 baseColor = mix(uBaseColor * 0.35, uBaseColor * 1.5 + vec3(0.2, 0.3, 0.4), vLineGlow);
+        baseColor *= 1.0 + energy * 0.4;
+        gl_FragColor = vec4(baseColor, vLineAlpha);
     }
 `;
 
@@ -363,32 +675,42 @@ const geo = new THREE.BufferGeometry();
 const posArr = new Float32Array(PARTICLE_COUNT * 3);
 const targetArr = new Float32Array(PARTICLE_COUNT * 3);
 const randArr = new Float32Array(PARTICLE_COUNT);
+const sizeBiasArr = new Float32Array(PARTICLE_COUNT);
 
 for (let i = 0; i < PARTICLE_COUNT; i++) {
     posArr[i * 3] = 0;
     posArr[i * 3 + 1] = 0;
     posArr[i * 3 + 2] = 0;
     randArr[i] = Math.random();
+    sizeBiasArr[i] = Math.random();
 }
 geo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
 geo.setAttribute('aTarget', new THREE.BufferAttribute(targetArr, 3));
 geo.setAttribute('aRandom', new THREE.BufferAttribute(randArr, 1));
+geo.setAttribute('aSizeBias', new THREE.BufferAttribute(sizeBiasArr, 1));
+
+const sharedUniforms = {
+    uTime: { value: 0 },
+    uExpansion: { value: 1.0 },
+    uSwirl: { value: 0.0 },
+    uWiggle: { value: 0.0 },
+    uExplosion: { value: 0.0 },
+    uMaxSize: { value: CONFIG.particles.defaultSize },
+    uDotSizeMin: { value: CONFIG.controls.dotSize.min.default },
+    uDotSizeMax: { value: CONFIG.controls.dotSize.max.default },
+    uSpacing: { value: CONFIG.controls.spacing.default },
+    uTex: { value: particleTex },
+    uAttractorPos: { value: new THREE.Vector3(0, 0, 0) },
+    uAttractorStrength: { value: 0.0 },
+    uWindForce: { value: new THREE.Vector3(0, 0, 0) },
+    uFreezeTime: { value: 0.0 },
+    uPulse: { value: 0.0 },
+    uFlow: { value: 0.0 },
+    uBaseColor: { value: new THREE.Color(CONFIG.controls.color.default) }
+};
 
 const mat = new THREE.ShaderMaterial({
-    uniforms: {
-        uTime: { value: 0 },
-        uExpansion: { value: 1.0 },
-        uSwirl: { value: 0.0 },
-        uWiggle: { value: 0.0 },
-        uExplosion: { value: 0.0 },
-        uMaxSize: { value: CONFIG.particles.defaultSize },
-        uTex: { value: particleTex },
-        uAttractorPos: { value: new THREE.Vector3(0, 0, 0) },
-        uAttractorStrength: { value: 0.0 },
-        uWindForce: { value: new THREE.Vector3(0, 0, 0) },
-        uFreezeTime: { value: 0.0 },
-        uPulse: { value: 0.0 }
-    },
+    uniforms: sharedUniforms,
     vertexShader: vShader,
     fragmentShader: fShader,
     transparent: true,
@@ -396,12 +718,31 @@ const mat = new THREE.ShaderMaterial({
     blending: THREE.AdditiveBlending
 });
 
+const cosmicCluster = new THREE.Group();
+scene.add(cosmicCluster);
+
 const particles = new THREE.Points(geo, mat);
-scene.add(particles);
+cosmicCluster.add(particles);
+
+const sphereLineGeometry = new THREE.BufferGeometry();
+sphereLineGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(0), 3));
+sphereLineGeometry.setAttribute('aRandom', new THREE.BufferAttribute(new Float32Array(0), 1));
+const sphereLineMaterial = new THREE.ShaderMaterial({
+    uniforms: sharedUniforms,
+    vertexShader: lineVShader,
+    fragmentShader: lineFShader,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
+});
+const sphereLines = new THREE.LineSegments(sphereLineGeometry, sphereLineMaterial);
+sphereLines.visible = false;
+cosmicCluster.add(sphereLines);
 
 // ============================================
 // BACKGROUND BOKEH + GALAXY
 // ============================================
+const bokehMaterials = [];
 const bgGeo = new THREE.BufferGeometry();
 const bgPos = new Float32Array(CONFIG.particles.backgroundCount * 3);
 for (let i = 0; i < CONFIG.particles.backgroundCount; i++) {
@@ -410,17 +751,42 @@ for (let i = 0; i < CONFIG.particles.backgroundCount; i++) {
     bgPos[i * 3 + 2] = (Math.random() - 0.5) * 50 - 20;
 }
 bgGeo.setAttribute('position', new THREE.BufferAttribute(bgPos, 3));
+const BASE_BOKEH_SIZE = 2.5;
 const bgMat = new THREE.PointsMaterial({
-    color: 0x1a6bff,
-    size: 2.5,
+    color: new THREE.Color(CONFIG.controls.bokehColor.default),
+    size: BASE_BOKEH_SIZE,
     map: particleTex,
     transparent: true,
     opacity: 0.6,
     blending: THREE.AdditiveBlending,
     depthWrite: false
 });
+bokehMaterials.push(bgMat);
 const bgPoints = new THREE.Points(bgGeo, bgMat);
-scene.add(bgPoints);
+cosmicCluster.add(bgPoints);
+
+const LARGE_BOKEH_SIZE = BASE_BOKEH_SIZE * 2.25;
+const bgGeoLarge = new THREE.BufferGeometry();
+const largeCount = Math.floor(CONFIG.particles.backgroundCount * 0.35);
+const bgPosLarge = new Float32Array(largeCount * 3);
+for (let i = 0; i < largeCount; i++) {
+    bgPosLarge[i * 3] = (Math.random() - 0.5) * 120;
+    bgPosLarge[i * 3 + 1] = (Math.random() - 0.5) * 80;
+    bgPosLarge[i * 3 + 2] = (Math.random() - 0.5) * 70 - 30;
+}
+bgGeoLarge.setAttribute('position', new THREE.BufferAttribute(bgPosLarge, 3));
+const bgMatLarge = new THREE.PointsMaterial({
+    color: new THREE.Color(CONFIG.controls.bokehColor.default),
+    size: LARGE_BOKEH_SIZE,
+    map: particleTex,
+    transparent: true,
+    opacity: 0.45,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+});
+bokehMaterials.push(bgMatLarge);
+const bgPointsLarge = new THREE.Points(bgGeoLarge, bgMatLarge);
+cosmicCluster.add(bgPointsLarge);
 
 const GALAXY_STAR_COUNT = 4000;
 const galaxyGeo = new THREE.BufferGeometry();
@@ -436,15 +802,16 @@ for (let i = 0; i < GALAXY_STAR_COUNT; i++) {
     galaxyPositions[i * 3] = x;
     galaxyPositions[i * 3 + 1] = y;
     galaxyPositions[i * 3 + 2] = z;
-    const color = getGalaxyColor();
+    const color = getGalaxyColor(i / GALAXY_STAR_COUNT);
     galaxyColors[i * 3] = color.r;
     galaxyColors[i * 3 + 1] = color.g;
     galaxyColors[i * 3 + 2] = color.b;
 }
 galaxyGeo.setAttribute('position', new THREE.BufferAttribute(galaxyPositions, 3));
 galaxyGeo.setAttribute('color', new THREE.BufferAttribute(galaxyColors, 3));
+const BASE_GALAXY_SIZE = 3.5;
 const galaxyMat = new THREE.PointsMaterial({
-    size: 3.5,
+    size: BASE_GALAXY_SIZE,
     map: particleTex,
     transparent: true,
     opacity: 0.45,
@@ -453,23 +820,211 @@ const galaxyMat = new THREE.PointsMaterial({
     depthWrite: false
 });
 const galaxyField = new THREE.Points(galaxyGeo, galaxyMat);
-scene.add(galaxyField);
+cosmicCluster.add(galaxyField);
 
-scene.background = new THREE.Color(0x050c1c);
+scene.background = null;
 
 // ============================================
 // SHAPE GENERATION FUNCTIONS
 // ============================================
-function getPointOnSphere() {
-    const u = Math.random();
-    const v = Math.random();
-    const theta = 2 * Math.PI * u;
-    const phi = Math.acos(2 * v - 1);
-    const r = 10 + Math.random();
+let structuredSpherePattern = null;
+
+function regenerateSpherePattern() {
+    structuredSpherePattern = generateLayeredSpherePattern(PARTICLE_COUNT);
+}
+
+function getSpherePattern() {
+    if (
+        !structuredSpherePattern ||
+        structuredSpherePattern.count !== PARTICLE_COUNT ||
+        !structuredSpherePattern.linePositions
+    ) {
+        regenerateSpherePattern();
+    }
+    return structuredSpherePattern;
+}
+
+function generateLayeredSpherePattern(desiredCount) {
+    const basePositions = [];
+    const baseSizes = [];
+    const lineSegments = [];
+
+    const pushPoint = (x, y, z, sizeBias) => {
+        const idx = basePositions.length;
+        basePositions.push({ x, y, z });
+        baseSizes.push(THREE.MathUtils.clamp(sizeBias, 0, 1));
+        return idx;
+    };
+
+    const connectLoop = (indices) => {
+        if (!indices || indices.length < 2) return;
+        for (let i = 0; i < indices.length; i++) {
+            const a = indices[i];
+            const b = indices[(i + 1) % indices.length];
+            lineSegments.push([a, b]);
+        }
+    };
+
+    const connectRings = (ringA, ringB) => {
+        if (!ringA || !ringB || !ringA.length || !ringB.length) return;
+        const len = Math.max(ringA.length, ringB.length);
+        for (let i = 0; i < len; i++) {
+            const a = ringA[Math.floor((i / len) * ringA.length)];
+            const b = ringB[Math.floor((i / len) * ringB.length)];
+            lineSegments.push([a, b]);
+        }
+    };
+
+    const outerRingMeta = [];
+    const innerRingMeta = [];
+
+    const buildLatLongLayers = (radius, latSteps, baseSegments, sizeScale, verticalScale = 1, metaStore = null) => {
+        let prevRing = null;
+        for (let i = 0; i <= latSteps; i++) {
+            const v = i / latSteps;
+            const theta = (v - 0.5) * Math.PI;
+            const y = radius * Math.sin(theta) * verticalScale;
+            const ringRadius = Math.abs(radius * Math.cos(theta));
+            const normalized = 1 - Math.abs(v - 0.5) * 2;
+            let ringIndices = [];
+            if (ringRadius < 0.05) {
+                const idx = pushPoint(0, y, 0, sizeScale * 0.9);
+                ringIndices = [idx];
+            } else {
+                const segments = Math.max(12, Math.floor(baseSegments * (0.3 + normalized * 0.7) * (ringRadius / radius)));
+                for (let j = 0; j < segments; j++) {
+                    const phi = (j / segments) * Math.PI * 2;
+                    const x = ringRadius * Math.cos(phi);
+                    const z = ringRadius * Math.sin(phi);
+                    const sizeBias = sizeScale * (0.6 + normalized * 0.4);
+                    const idx = pushPoint(x, y, z, sizeBias);
+                    ringIndices.push(idx);
+                }
+            }
+            connectLoop(ringIndices);
+            if (prevRing) {
+                connectRings(prevRing, ringIndices);
+            }
+            prevRing = ringIndices;
+            if (metaStore) {
+                metaStore.push({ y, indices: ringIndices });
+            }
+        }
+    };
+
+    const addAccentRing = (radius, y, segments, sizeBias, metaStore = null) => {
+        const ringIndices = [];
+        for (let j = 0; j < segments; j++) {
+            const phi = (j / segments) * Math.PI * 2;
+            const x = radius * Math.cos(phi);
+            const z = radius * Math.sin(phi);
+            const idx = pushPoint(x, y, z, sizeBias);
+            ringIndices.push(idx);
+        }
+        connectLoop(ringIndices);
+        if (metaStore) {
+            metaStore.push({ y, indices: ringIndices });
+        }
+        return ringIndices;
+    };
+
+    const outerRadius = 12.5;
+    buildLatLongLayers(outerRadius, 30, 54, 0.9, 0.95, outerRingMeta);
+
+    const accentOffsets = [0.0, 0.18, -0.18, 0.35, -0.35, 0.55, -0.55];
+    accentOffsets.forEach(offset => {
+        const y = offset * outerRadius * 0.95;
+        const radius = Math.sqrt(Math.max(outerRadius * outerRadius - y * y, 0));
+        const ring = addAccentRing(radius, y, 96, 0.95, outerRingMeta);
+        const closest = outerRingMeta.reduce((closestRing, candidate) => {
+            if (candidate.indices === ring) return closestRing;
+            if (!closestRing) return candidate;
+            return Math.abs(candidate.y - y) < Math.abs(closestRing.y - y) ? candidate : closestRing;
+        }, null);
+        if (closest) {
+            connectRings(ring, closest.indices);
+        }
+    });
+
+    const innerRadius = outerRadius * 0.42;
+    buildLatLongLayers(innerRadius, 18, 42, 0.65, 1.0, innerRingMeta);
+
+    const equatorialStacks = 9;
+    let prevStack = null;
+    for (let i = 0; i < equatorialStacks; i++) {
+        const t = (i / (equatorialStacks - 1)) - 0.5;
+        const widthFactor = Math.cos(t * Math.PI);
+        const radius = innerRadius * (0.25 + 0.65 * Math.abs(widthFactor));
+        const y = t * innerRadius * 0.9;
+        const ring = addAccentRing(radius, y, Math.floor(48 + 20 * widthFactor), 0.75 + widthFactor * 0.25, innerRingMeta);
+        if (prevStack) {
+            connectRings(prevStack, ring);
+        }
+        prevStack = ring;
+    }
+
+    const flattenIndices = meta => meta.reduce((acc, ring) => acc.concat(ring.indices), []);
+    const outerAll = flattenIndices(outerRingMeta);
+    const innerAll = flattenIndices(innerRingMeta);
+
+    const connectCollections = (source, target, step = 3) => {
+        if (!source.length || !target.length) return;
+        for (let i = 0; i < source.length; i += step) {
+            const idxA = source[i];
+            const idxB = target[Math.floor((i / source.length) * target.length) % target.length];
+            lineSegments.push([idxA, idxB]);
+        }
+    };
+
+    connectCollections(outerAll, innerAll, 5);
+
+    const connectNearestWithin = (indices, hops = 2) => {
+        const len = indices.length;
+        if (len < 3) return;
+        for (let i = 0; i < len; i++) {
+            for (let h = 1; h <= hops; h++) {
+                const a = indices[i];
+                const b = indices[(i + h) % len];
+                lineSegments.push([a, b]);
+            }
+        }
+    };
+
+    innerRingMeta.forEach(ringMeta => connectNearestWithin(ringMeta.indices, 3));
+
+    const uniqueCount = basePositions.length;
+    const positions = new Array(desiredCount);
+    const sizeBiases = new Array(desiredCount);
+    for (let i = 0; i < desiredCount; i++) {
+        const idx = i % uniqueCount;
+        positions[i] = basePositions[idx];
+        sizeBiases[i] = baseSizes[idx];
+    }
+
+    const linePositions = new Float32Array(lineSegments.length * 6);
+    const lineRandoms = new Float32Array(lineSegments.length * 2);
+    lineSegments.forEach((pair, segmentIndex) => {
+        const a = basePositions[pair[0]];
+        const b = basePositions[pair[1]];
+        const offset = segmentIndex * 6;
+        linePositions[offset] = a.x;
+        linePositions[offset + 1] = a.y;
+        linePositions[offset + 2] = a.z;
+        linePositions[offset + 3] = b.x;
+        linePositions[offset + 4] = b.y;
+        linePositions[offset + 5] = b.z;
+        const bias = THREE.MathUtils.clamp((baseSizes[pair[0]] + baseSizes[pair[1]]) * 0.5, 0.0, 1.0);
+        const variance = THREE.MathUtils.clamp(bias + (Math.random() - 0.5) * 0.2, 0.0, 1.0);
+        lineRandoms[segmentIndex * 2] = variance;
+        lineRandoms[segmentIndex * 2 + 1] = variance;
+    });
+
     return {
-        x: r * Math.sin(phi) * Math.cos(theta),
-        y: r * Math.sin(phi) * Math.sin(theta),
-        z: r * Math.cos(phi)
+        positions,
+        sizes: sizeBiases,
+        linePositions,
+        lineRandoms,
+        count: desiredCount
     };
 }
 
@@ -543,58 +1098,166 @@ function getPointFireworks() {
 // ============================================
 // SHAPE MANAGEMENT
 // ============================================
-const shapes = ['sphere', 'heart', 'saturn', 'flower', 'buddha', 'fireworks'];
+const shapes = ['sphere', 'fireworks'];
 let currentShapeIndex = 0;
 
-window.setShape = (type) => {
+function getPointOnSphere() {
+    const u = Math.random();
+    const v = Math.random();
+    const theta = 2 * Math.PI * u;
+    const phi = Math.acos(2 * v - 1);
+    const r = 10 + Math.random();
+    return {
+        x: r * Math.sin(phi) * Math.cos(theta),
+        y: r * Math.sin(phi) * Math.sin(theta),
+        z: r * Math.cos(phi)
+    };
+}
+
+function setShape(type) {
     const arr = geo.attributes.aTarget.array;
+    const randArr = geo.attributes.aRandom.array;
+    const sizeBiasAttr = geo.attributes.aSizeBias.array;
+    const useStructuredSphere = type === 'sphere';
+    const useNova = type === 'fireworks';
+    const spherePattern = useStructuredSphere ? getSpherePattern() : null;
+
     for (let i = 0; i < PARTICLE_COUNT; i++) {
         let p;
-        if (type === 'heart') p = getPointHeart();
-        else if (type === 'saturn') p = getPointSaturn();
-        else if (type === 'flower') p = getPointFlower();
-        else if (type === 'buddha') p = getPointBuddha();
-        else if (type === 'fireworks') p = getPointFireworks();
-        else p = getPointOnSphere();
+        let sizeFactor = Math.random();
+        if (useStructuredSphere && spherePattern) {
+            const idx = i % spherePattern.positions.length;
+            p = spherePattern.positions[idx];
+            sizeFactor = spherePattern.sizes[idx];
+            randArr[i] = Math.random();
+        } else if (useNova) {
+            p = getPointFireworks();
+            randArr[i] = Math.random();
+        } else {
+            p = getPointOnSphere();
+            randArr[i] = Math.random();
+        }
         arr[i * 3] = p.x;
         arr[i * 3 + 1] = p.y;
         arr[i * 3 + 2] = p.z;
+        sizeBiasAttr[i] = sizeFactor;
     }
     geo.attributes.aTarget.needsUpdate = true;
+    geo.attributes.aRandom.needsUpdate = true;
+    geo.attributes.aSizeBias.needsUpdate = true;
+
+    if (useStructuredSphere && spherePattern && spherePattern.linePositions) {
+        sphereLineGeometry.setAttribute('position', new THREE.BufferAttribute(spherePattern.linePositions, 3));
+        if (spherePattern.lineRandoms) {
+            sphereLineGeometry.setAttribute('aRandom', new THREE.BufferAttribute(spherePattern.lineRandoms, 1));
+        }
+        sphereLineGeometry.computeBoundingSphere();
+        sphereLineGeometry.setDrawRange(0, spherePattern.linePositions.length / 3);
+        sphereLines.visible = true;
+    } else {
+        sphereLineGeometry.setDrawRange(0, 0);
+        sphereLines.visible = false;
+    }
 
     const shapeIdx = shapes.indexOf(type);
     if (shapeIdx !== -1) currentShapeIndex = shapeIdx;
 
-    // Update active state only for shape buttons (buttons with onclick containing setShape)
-    document.querySelectorAll('.btn').forEach(b => {
-        const onclick = b.getAttribute('onclick');
-        if (onclick && onclick.includes('setShape')) {
-            b.classList.remove('active');
+    document.querySelectorAll('[data-shape]').forEach(btn => {
+        if (btn.dataset.shape === type) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
         }
     });
-    
-    if (window.event && window.event.target) {
-        window.event.target.classList.add('active');
-    } else {
-        const btn = Array.from(document.querySelectorAll('.btn')).find(b => {
-            const onclick = b.getAttribute('onclick');
-            return onclick && onclick.includes(type);
-        });
-        if (btn) btn.classList.add('active');
-    }
-};
+}
+
+window.setShape = setShape;
 
 // ============================================
 // UI EVENT HANDLERS
 // ============================================
 function initUIHandlers() {
-    document.getElementById('glow-slider').addEventListener('input', (e) => {
-        bloomPass.strength = parseFloat(e.target.value);
+    const setupSlider = ({ sliderId, displayId, stateKey, config }) => {
+        const slider = document.getElementById(sliderId);
+        if (!slider) return;
+        slider.min = config.sliderMin;
+        slider.max = config.sliderMax;
+        slider.step = (config.step ?? 0.01).toString();
+        slider.value = config.default;
+        const valueEl = document.getElementById(displayId);
+        const updateDisplay = (value) => {
+            if (valueEl) {
+                valueEl.innerText = Number(value).toFixed(config.displayPrecision ?? 2);
+            }
+        };
+        updateDisplay(config.default);
+        slider.addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            if (controlState[stateKey]) {
+                controlState[stateKey].target = val;
+            }
+            updateDisplay(val);
+        });
+    };
+
+    setupSlider({
+        sliderId: 'glow-slider',
+        displayId: 'glow-value',
+        stateKey: 'glow',
+        config: CONFIG.controls.glow
+    });
+    setupSlider({
+        sliderId: 'size-slider',
+        displayId: 'size-value',
+        stateKey: 'size',
+        config: CONFIG.controls.size
+    });
+    setupSlider({
+        sliderId: 'density-slider',
+        displayId: 'density-value',
+        stateKey: 'density',
+        config: CONFIG.controls.density
+    });
+    setupSlider({
+        sliderId: 'spacing-slider',
+        displayId: 'spacing-value',
+        stateKey: 'spacing',
+        config: CONFIG.controls.spacing
+    });
+    setupSlider({
+        sliderId: 'dot-min-slider',
+        displayId: 'dot-min-value',
+        stateKey: 'dotMin',
+        config: CONFIG.controls.dotSize.min
+    });
+    setupSlider({
+        sliderId: 'dot-max-slider',
+        displayId: 'dot-max-value',
+        stateKey: 'dotMax',
+        config: CONFIG.controls.dotSize.max
+    });
+    setupSlider({
+        sliderId: 'halo-slider',
+        displayId: 'halo-value',
+        stateKey: 'halo',
+        config: CONFIG.controls.halo
     });
 
-    document.getElementById('size-slider').addEventListener('input', (e) => {
-        mat.uniforms.uMaxSize.value = parseFloat(e.target.value);
-    });
+    const particleColorPicker = document.getElementById('particle-color');
+    if (particleColorPicker) {
+        particleColorPicker.value = CONFIG.controls.color.default;
+        particleColorPicker.addEventListener('input', (e) => {
+            setParticleColor(e.target.value);
+        });
+    }
+
+    const bokehColorPicker = document.getElementById('bokeh-color');
+    if (bokehColorPicker) {
+        bokehColorPicker.value = CONFIG.controls.bokehColor.default;
+        bokehColorPicker.addEventListener('input', (e) => {
+            setBokehColor(e.target.value);
+        });
+    }
 
     // Gesture toggle button
     document.getElementById('gesture-toggle').addEventListener('click', () => {
@@ -613,6 +1276,33 @@ function initUIHandlers() {
             console.log('Gesture detection disabled');
         }
     });
+
+    document.querySelectorAll('[data-shape]').forEach(btn => {
+        btn.addEventListener('click', (event) => {
+            event.preventDefault();
+            const shape = btn.dataset.shape;
+            if (shape) {
+                setShape(shape);
+            }
+        });
+    });
+}
+
+function initControlPanelToggle() {
+    const hud = document.getElementById('hud');
+    const toggleBtn = document.getElementById('controls-toggle');
+    if (!hud || !toggleBtn) return;
+
+    const updateToggleLabel = () => {
+        toggleBtn.innerText = hud.classList.contains('hidden') ? 'Show Controls' : 'Hide Controls';
+    };
+
+    toggleBtn.addEventListener('click', () => {
+        hud.classList.toggle('hidden');
+        updateToggleLabel();
+    });
+
+    updateToggleLabel();
 }
 
 const logElements = {};
@@ -690,7 +1380,17 @@ function commitGestureState(label, intensity = 0.05) {
 // ============================================
 // HAND DETECTION
 // ============================================
-let video, handCanvas, handCtx, loader, startBtn, wiggleVal, depthVal, gestureFeedbackEl, gestureFeedbackLabel, gestureFeedbackBar;
+let video, handCanvas, handCtx, loader, startBtn, wiggleVal, depthVal, gestureFeedbackEl, gestureFeedbackLabel, gestureFeedbackBar, cameraFeed;
+
+function updateHandCanvasSize() {
+    if (!handCanvas) return;
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    handCanvas.width = width;
+    handCanvas.height = height;
+    handCanvas.style.width = `${width}px`;
+    handCanvas.style.height = `${height}px`;
+}
 
 let handLandmarker = null;
 let lastVideoTime = -1;
@@ -711,12 +1411,14 @@ let smoothedPulse = 0.0;
 let freezeTimeTarget = 1.0;
 let currentGesture = 'None';
 let gestureDetectionEnabled = true;
+let flowUniformValue = 0.0;
 
 // Rotation Control
 let targetRotationSpeed = CONFIG.physics.baseRotationSpeed;
 let smoothedRotationSpeed = CONFIG.physics.baseRotationSpeed;
 let prevFistAngle = null;
 let lastGestureSampleTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+let cosmicRotation = 0;
 
 function decayRotationTarget() {
     targetRotationSpeed += (CONFIG.physics.baseRotationSpeed - targetRotationSpeed) * CONFIG.physics.rotationIdleDecay;
@@ -764,11 +1466,13 @@ function startWebcam() {
         }
     }).then((stream) => {
         video.srcObject = stream;
+        if (cameraFeed) {
+            cameraFeed.srcObject = stream;
+        }
         video.addEventListener('loadeddata', () => {
             loader.style.display = 'none';
             startBtn.style.display = 'none';
-            handCanvas.width = CONFIG.video.width;
-            handCanvas.height = CONFIG.video.height;
+            updateHandCanvasSize();
             console.log("Camera started successfully");
             detectHands();
         });
@@ -776,6 +1480,9 @@ function startWebcam() {
             console.error("Video play error:", e);
             loader.innerText = "Click to Start";
             startBtn.style.display = 'block';
+        });
+        cameraFeed?.play?.().catch(err => {
+            console.warn('Camera feed playback failed', err);
         });
     }).catch(e => {
         console.error("Camera error:", e);
@@ -912,7 +1619,7 @@ function normalizeAngleDiff(angle) {
     return Math.atan2(Math.sin(angle), Math.cos(angle));
 }
 
-function handleFistRotation(hand, deltaTime) {
+function handleExpansionRotation(hand, deltaTime) {
     const twistAngle = getPalmTwistAngle(hand);
 
     if (prevFistAngle === null) {
@@ -1202,6 +1909,39 @@ function processGestures(result) {
 
     let movement = 0;
 
+    if (hands.length === 0) {
+        const t = Date.now() * 0.001;
+        smoothedExpansion = 0.8 + Math.sin(t) * 0.2;
+        smoothedSwirl = Math.sin(t * 0.5) * 0.5;
+        smoothedWiggle = 0;
+        smoothedExplosion = 0;
+        freezeTimeTarget = 1.0;
+        smoothedAttractorStrength *= 0.95;
+        smoothedWindForce.multiplyScalar(0.95);
+        smoothedPulse *= 0.95;
+        currentGesture = 'Auto Mode';
+        prevHandX = null;
+        prevTips = [];
+        prevFistAngle = null;
+        wiggleVal.innerText = "AUTO";
+        depthVal.innerText = "AUTO";
+        updateLog('openness', "AUTO");
+        updateLog('gesture', currentGesture);
+        updateLog('expansion', smoothedExpansion.toFixed(3));
+        updateLog('swirl', smoothedSwirl.toFixed(3));
+        updateLog('wiggle', "0.000");
+        updateLog('explosion', "0.000");
+        updateLog('size', "N/A");
+        updateLog('movement', "0.000");
+        targetRotationSpeed = CONFIG.physics.baseRotationSpeed;
+        fingerVelocityHistory.clear();
+        if (!rotationGestureActive) {
+            decayRotationTarget();
+        }
+        commitGestureState(currentGesture, 0.05);
+        return;
+    }
+
     if (hands.length > 0) {
         const aggregatedHands = aggregateHandData(hands);
         const hand = hands[0];
@@ -1211,66 +1951,70 @@ function processGestures(result) {
         const isFist = detectFist(hand);
         let isPinching = false;
         let isPeaceSign = false;
-        if (isFist) {
-            currentGesture = '✊ Rotate Fist';
-            freezeTimeTarget = 1.0;
-            targetAttractorStrength = 0.0;
-            targetWindForce.set(0, 0, 0);
-            targetPulse = 0.0;
-            rotationGestureActive = handleFistRotation(hand, deltaTime);
-        } else {
-            prevFistAngle = null;
-            isPinching = detectPinch(hand);
-            if (isPinching) {
-                currentGesture = '👌 Pinch (Attract)';
-                const pinchCenter = getPinchCenter(hand);
-                mat.uniforms.uAttractorPos.value.set(
-                    (pinchCenter.x - 0.5) * 60,
-                    (0.5 - pinchCenter.y) * 45,
-                    (pinchCenter.z || 0) * 20
-                );
-                targetAttractorStrength = 5.0;
+
+        if (fingerCount === 5) {
+            const swipeDirection = detectSwipe(hand);
+            if (swipeDirection) {
+                changeShape(swipeDirection);
+                currentGesture = swipeDirection === 'right' ? '🖐️➡️ Swipe Right' : '🖐️⬅️ Swipe Left';
+                targetAttractorStrength = 0.0;
                 targetWindForce.set(0, 0, 0);
                 targetPulse = 0.0;
                 freezeTimeTarget = 1.0;
             } else {
-                isPeaceSign = detectPeaceSign(hand);
-                if (isPeaceSign) {
-                    currentGesture = '✌️ Peace (Pulse)';
-                    targetPulse = 1.0;
-                    targetAttractorStrength = 0.0;
+                currentGesture = '🖐️ Rotate + Expand';
+                smoothedExplosion = Math.min(1.5, smoothedExplosion + 0.03);
+                targetAttractorStrength = 0.0;
+                applyDirectionalWind(aggregatedHands.direction, 8, targetWindForce);
+                targetPulse = 0.0;
+                freezeTimeTarget = 1.0;
+                rotationGestureActive = handleExpansionRotation(hand, deltaTime);
+            }
+        } else {
+            prevFistAngle = null;
+            if (isFist) {
+                currentGesture = '✊ Collapse';
+                freezeTimeTarget = 0.7;
+                smoothedExpansion = Math.max(0, smoothedExpansion - 0.04);
+                targetAttractorStrength = 0.0;
+                targetWindForce.set(0, 0, 0);
+                targetPulse = 0.0;
+            } else {
+                isPinching = detectPinch(hand);
+                if (isPinching) {
+                    currentGesture = '👌 Pinch (Attract)';
+                    const pinchCenter = getPinchCenter(hand);
+                    mat.uniforms.uAttractorPos.value.set(
+                        (pinchCenter.x - 0.5) * 60,
+                        (0.5 - pinchCenter.y) * 45,
+                        (pinchCenter.z || 0) * 20
+                    );
+                    targetAttractorStrength = 5.0;
                     targetWindForce.set(0, 0, 0);
+                    targetPulse = 0.0;
                     freezeTimeTarget = 1.0;
-                } else if (fingerCount === 5) {
-                    const swipeDirection = detectSwipe(hand);
-                    if (swipeDirection) {
-                        changeShape(swipeDirection);
-                        currentGesture = swipeDirection === 'right' ? '🖐️➡️ Swipe Right' : '🖐️⬅️ Swipe Left';
+                } else {
+                    isPeaceSign = detectPeaceSign(hand);
+                    if (isPeaceSign) {
+                        currentGesture = '✌️ Peace (Pulse)';
+                        targetPulse = 1.0;
+                        targetAttractorStrength = 0.0;
+                        targetWindForce.set(0, 0, 0);
+                        freezeTimeTarget = 1.0;
+                    } else if (fingerCount === 1) {
+                        currentGesture = '☝️ One Finger (Collapse)';
+                        smoothedExpansion = Math.max(0, smoothedExpansion - 0.03);
                         targetAttractorStrength = 0.0;
                         targetWindForce.set(0, 0, 0);
                         targetPulse = 0.0;
                         freezeTimeTarget = 1.0;
                     } else {
-                        currentGesture = '🖐️ Five Fingers (Expand)';
-                        smoothedExplosion = Math.min(1.5, smoothedExplosion + 0.03);
+                        currentGesture = `🤚 ${fingerCount} Fingers`;
+                        applyDirectionalWind(aggregatedHands.direction, 5, targetWindForce);
                         targetAttractorStrength = 0.0;
-                        applyDirectionalWind(aggregatedHands.direction, 8, targetWindForce);
                         targetPulse = 0.0;
                         freezeTimeTarget = 1.0;
                     }
-                } else if (fingerCount === 1) {
-                    currentGesture = '☝️ One Finger (Collapse)';
-                    smoothedExpansion = Math.max(0, smoothedExpansion - 0.03);
-                    targetAttractorStrength = 0.0;
-                    targetWindForce.set(0, 0, 0);
-                    targetPulse = 0.0;
-                    freezeTimeTarget = 1.0;
-                } else {
-                    currentGesture = `🤚 ${fingerCount} Fingers`;
-                    applyDirectionalWind(aggregatedHands.direction, 5, targetWindForce);
-                    targetAttractorStrength = 0.0;
-                    targetPulse = 0.0;
-                    freezeTimeTarget = 1.0;
                 }
             }
         }
@@ -1318,34 +2062,6 @@ function processGestures(result) {
             smoothedSwirl *= 0.95;
         }
         updateLog('swirl', smoothedSwirl.toFixed(3));
-
-    } else {
-        // Auto mode when no hands detected
-        const t = Date.now() * 0.001;
-        smoothedExpansion = 0.8 + Math.sin(t) * 0.2;
-        smoothedSwirl = Math.sin(t * 0.5) * 0.5;
-        smoothedWiggle = 0;
-        smoothedExplosion = 0;
-        freezeTimeTarget = 1.0;
-        smoothedAttractorStrength *= 0.95;
-        smoothedWindForce.multiplyScalar(0.95);
-        smoothedPulse *= 0.95;
-        currentGesture = 'Auto Mode';
-        prevHandX = null;
-        prevTips = [];
-        prevFistAngle = null;
-        wiggleVal.innerText = "AUTO";
-        depthVal.innerText = "AUTO";
-        updateLog('openness', "AUTO");
-        updateLog('gesture', currentGesture);
-        updateLog('expansion', smoothedExpansion.toFixed(3));
-        updateLog('swirl', smoothedSwirl.toFixed(3));
-        updateLog('wiggle', "0.000");
-        updateLog('explosion', "0.000");
-        updateLog('size', "N/A");
-        updateLog('movement', "0.000");
-        targetRotationSpeed = CONFIG.physics.baseRotationSpeed;
-        fingerVelocityHistory.clear();
     }
 
     if (!rotationGestureActive) {
@@ -1382,13 +2098,117 @@ function animate() {
     mat.uniforms.uAttractorStrength.value = smoothedAttractorStrength;
     mat.uniforms.uWindForce.value.copy(smoothedWindForce);
     mat.uniforms.uPulse.value = smoothedPulse;
+    const flowTarget = THREE.MathUtils.clamp(
+        smoothedWiggle * 1.1 +
+        smoothedWindForce.length() * 0.35 +
+        Math.abs(smoothedSwirl) * 0.4 +
+        smoothedPulse * 0.8 +
+        smoothedExplosion * 0.35,
+        0,
+        2.5
+    );
+    flowUniformValue += (flowTarget - flowUniformValue) * 0.08;
+    sharedUniforms.uFlow.value = flowUniformValue;
+
+    // Smoothly apply manual control adjustments so glow/size evolve more naturally
+    const glowControl = CONFIG.controls.glow;
+    controlState.glow.value += (controlState.glow.target - controlState.glow.value) * glowControl.smoothing;
+    const glowNorm = THREE.MathUtils.clamp(
+        (controlState.glow.value - glowControl.sliderMin) / (glowControl.sliderMax - glowControl.sliderMin),
+        0,
+        1
+    );
+    const glowPerceptual = Math.pow(glowNorm, glowControl.gamma);
+    bloomPass.strength = THREE.MathUtils.lerp(glowControl.strengthMin, glowControl.strengthMax, glowPerceptual);
+    bloomPass.radius = THREE.MathUtils.lerp(glowControl.radiusMin, glowControl.radiusMax, glowPerceptual);
+    bloomPass.threshold = THREE.MathUtils.lerp(glowControl.thresholdMax, glowControl.thresholdMin, glowPerceptual);
+
+    const sizeControl = CONFIG.controls.size;
+    controlState.size.value += (controlState.size.target - controlState.size.value) * sizeControl.smoothing;
+    const sizeNorm = THREE.MathUtils.clamp(
+        (controlState.size.value - sizeControl.sliderMin) / (sizeControl.sliderMax - sizeControl.sliderMin),
+        0,
+        1
+    );
+    const sizePerceptual = Math.pow(sizeNorm, sizeControl.gamma);
+    const baseSize = THREE.MathUtils.lerp(sizeControl.baseMin, sizeControl.baseMax, sizePerceptual);
+    mat.uniforms.uMaxSize.value = baseSize;
+
+    const densityControl = CONFIG.controls.density;
+    controlState.density.value += (controlState.density.target - controlState.density.value) * densityControl.smoothing;
+    const densityNorm = THREE.MathUtils.clamp(
+        (controlState.density.value - densityControl.sliderMin) / (densityControl.sliderMax - densityControl.sliderMin),
+        0,
+        1
+    );
+    const densityFactor = THREE.MathUtils.lerp(
+        densityControl.minFactor,
+        densityControl.maxFactor,
+        Math.pow(densityNorm, densityControl.gamma)
+    );
+    const activeParticleCount = Math.max(1, Math.floor(PARTICLE_COUNT * densityFactor));
+    if (geo.drawRange.count !== activeParticleCount) {
+        geo.setDrawRange(0, activeParticleCount);
+    }
+
+    const spacingControl = CONFIG.controls.spacing;
+    controlState.spacing.value += (controlState.spacing.target - controlState.spacing.value) * spacingControl.smoothing;
+    const spacingNorm = THREE.MathUtils.clamp(
+        (controlState.spacing.value - spacingControl.sliderMin) / (spacingControl.sliderMax - spacingControl.sliderMin),
+        0,
+        1
+    );
+    const spacingPerceptual = Math.pow(spacingNorm, spacingControl.gamma);
+    const spacingValue = THREE.MathUtils.lerp(
+        spacingControl.sliderMin,
+        spacingControl.sliderMax,
+        spacingPerceptual
+    );
+    mat.uniforms.uSpacing.value = spacingValue;
+
+    const dotControl = CONFIG.controls.dotSize;
+    controlState.dotMin.value += (controlState.dotMin.target - controlState.dotMin.value) * dotControl.smoothing;
+    controlState.dotMax.value += (controlState.dotMax.target - controlState.dotMax.value) * dotControl.smoothing;
+    const dotMin = THREE.MathUtils.clamp(
+        controlState.dotMin.value,
+        dotControl.min.sliderMin,
+        dotControl.min.sliderMax
+    );
+    let dotMax = THREE.MathUtils.clamp(
+        controlState.dotMax.value,
+        dotControl.max.sliderMin,
+        dotControl.max.sliderMax
+    );
+    dotMax = Math.max(dotMax, dotMin + 0.05);
+    mat.uniforms.uDotSizeMin.value = dotMin;
+    mat.uniforms.uDotSizeMax.value = dotMax;
+    const haloControl = CONFIG.controls.halo;
+    controlState.halo.value += (controlState.halo.target - controlState.halo.value) * haloControl.smoothing;
+    const haloScale = THREE.MathUtils.clamp(
+        controlState.halo.value,
+        haloControl.sliderMin,
+        haloControl.sliderMax
+    );
+    bgMat.size = BASE_BOKEH_SIZE * haloScale;
+    if (typeof bgMatLarge !== 'undefined') {
+        bgMatLarge.size = LARGE_BOKEH_SIZE * haloScale;
+        bgMatLarge.needsUpdate = true;
+    }
+    galaxyMat.size = BASE_GALAXY_SIZE * (0.4 + haloScale * 0.6);
+    bgMat.needsUpdate = true;
+    galaxyMat.needsUpdate = true;
 
     smoothedRotationSpeed += (targetRotationSpeed - smoothedRotationSpeed) * CONFIG.physics.rotationSmoothingFactor;
     const rotationDelta = delta * smoothedRotationSpeed * mat.uniforms.uFreezeTime.value;
-    particles.rotation.y += rotationDelta;
-    bgPoints.rotation.y -= rotationDelta * 0.65;
-    galaxyField.rotation.y -= rotationDelta * 0.45;
-    galaxyField.rotation.x = THREE.MathUtils.lerp(galaxyField.rotation.x, Math.sin(clock.elapsedTime * 0.05) * 0.1, 0.05);
+    cosmicRotation += rotationDelta;
+    cosmicCluster.rotation.y = cosmicRotation;
+    bgPoints.rotation.y = -cosmicRotation * 0.3;
+    galaxyField.rotation.y = -cosmicRotation * 0.5;
+    galaxyField.rotation.x = THREE.MathUtils.lerp(
+        galaxyField.rotation.x,
+        Math.sin(clock.elapsedTime * 0.05) * 0.1,
+        0.05
+    );
     composer.render();
 }
 
@@ -1400,6 +2220,7 @@ window.addEventListener('resize', () => {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
+    updateHandCanvasSize();
 });
 
 // ============================================
@@ -1431,6 +2252,7 @@ window.addEventListener('beforeunload', () => {
 function init() {
     // Initialize DOM element references
     video = document.getElementById('input-video');
+    cameraFeed = document.getElementById('camera-feed');
     handCanvas = document.getElementById('hand-canvas');
     handCtx = handCanvas.getContext('2d');
     loader = document.getElementById('loader');
@@ -1440,11 +2262,15 @@ function init() {
     gestureFeedbackEl = document.getElementById('gesture-feedback');
     gestureFeedbackLabel = document.getElementById('gesture-label');
     gestureFeedbackBar = document.getElementById('gesture-meter-fill');
+    updateHandCanvasSize();
     cacheLogElements();
     updateGestureFeedback('Initializing', 0.2);
 
+    setParticleColor(CONFIG.controls.color.default);
+    setBokehColor(CONFIG.controls.bokehColor.default);
     setShape('sphere');
     initUIHandlers();
+    initControlPanelToggle();
     initStartButton();
     initHandDetection();
     animate();
@@ -1457,3 +2283,10 @@ if (document.readyState === 'loading') {
 } else {
     init();
 }
+    const colorPicker = document.getElementById('particle-color');
+    if (colorPicker) {
+        colorPicker.value = CONFIG.controls.color.default;
+        colorPicker.addEventListener('input', (e) => {
+            setParticleColor(e.target.value);
+        });
+    }
