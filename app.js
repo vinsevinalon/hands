@@ -55,11 +55,28 @@ const CONFIG = {
         swipeThreshold: 0.15,
         swipeCooldown: 1000,
         swipeVelocityMin: 0.15,
+        modeThresholds: {
+            enter: 0.6,
+            exit: 0.35,
+            decay: 0.05
+        }
+    },
+    filters: {
+        freq: 60,
+        minCutoff: 1.0,
+        beta: 0.08,
+        dCutoff: 1.0
     },
     physics: {
         smoothingFactor: 0.1,
         gestureSmoothingFactor: 0.15,
         windSmoothingFactor: 0.1,
+        rotationSmoothingFactor: 0.15,
+        baseRotationSpeed: 0.05,
+        maxGestureRotationSpeed: 3.0,
+        fistRotationMultiplier: 1.75,
+        minRotationVelocity: 0.15,
+        rotationIdleDecay: 0.15,
     },
 };
 
@@ -121,6 +138,77 @@ function createParticleTexture() {
     return new THREE.CanvasTexture(canvas);
 }
 const particleTex = createParticleTexture();
+
+const galaxyPalette = [
+    new THREE.Color(0x6ddcff),
+    new THREE.Color(0xb892ff),
+    new THREE.Color(0xffd6a5),
+    new THREE.Color(0x80ffea),
+    new THREE.Color(0xa7c7ff)
+];
+
+function getGalaxyColor() {
+    const base = galaxyPalette[Math.floor(Math.random() * galaxyPalette.length)].clone();
+    const intensity = 0.6 + Math.random() * 0.5;
+    return base.multiplyScalar(intensity);
+}
+
+class LowPassFilter {
+    constructor(alpha, initialValue = 0) {
+        this.setAlpha(alpha);
+        this.initialized = false;
+        this.prev = initialValue;
+    }
+    setAlpha(alpha) {
+        this.alpha = Math.max(0, Math.min(1, alpha));
+    }
+    filter(value) {
+        let result;
+        if (this.initialized) {
+            result = this.alpha * value + (1 - this.alpha) * this.prev;
+        } else {
+            result = value;
+            this.initialized = true;
+        }
+        this.prev = result;
+        return result;
+    }
+}
+
+class OneEuroFilter {
+    constructor(freq, minCutoff = 1.0, beta = 0, dCutoff = 1.0) {
+        this.freq = freq;
+        this.minCutoff = minCutoff;
+        this.beta = beta;
+        this.dCutoff = dCutoff;
+        this.xFilter = new LowPassFilter(this.alpha(minCutoff));
+        this.dxFilter = new LowPassFilter(this.alpha(dCutoff));
+        this.lastTime = null;
+    }
+    alpha(cutoff) {
+        const te = 1.0 / this.freq;
+        const tau = 1.0 / (2 * Math.PI * cutoff);
+        return 1.0 / (1.0 + tau / te);
+    }
+    filter(value, timestamp) {
+        if (this.lastTime !== null) {
+            const dt = timestamp - this.lastTime;
+            if (dt > 0) {
+                this.freq = 1.0 / dt;
+            }
+        }
+        this.lastTime = timestamp;
+        const dValue = this.xFilter.initialized ? (value - this.xFilter.prev) * this.freq : 0;
+        const edValue = this.dxFilter.filter(dValue);
+        const cutoff = this.minCutoff + this.beta * Math.abs(edValue);
+        this.xFilter.setAlpha(this.alpha(cutoff));
+        return this.xFilter.filter(value);
+    }
+}
+
+const landmarkFilterBank = new Map();
+const fingerVelocityHistory = new Map();
+const gestureState = { active: 'Auto Mode', confidence: 0.4 };
 
 // ============================================
 // SHADERS
@@ -312,7 +400,7 @@ const particles = new THREE.Points(geo, mat);
 scene.add(particles);
 
 // ============================================
-// BACKGROUND BOKEH
+// BACKGROUND BOKEH + GALAXY
 // ============================================
 const bgGeo = new THREE.BufferGeometry();
 const bgPos = new Float32Array(CONFIG.particles.backgroundCount * 3);
@@ -323,15 +411,51 @@ for (let i = 0; i < CONFIG.particles.backgroundCount; i++) {
 }
 bgGeo.setAttribute('position', new THREE.BufferAttribute(bgPos, 3));
 const bgMat = new THREE.PointsMaterial({
-    color: 0x0044aa,
-    size: 2.0,
+    color: 0x1a6bff,
+    size: 2.5,
     map: particleTex,
     transparent: true,
-    opacity: 0.4,
+    opacity: 0.6,
     blending: THREE.AdditiveBlending,
     depthWrite: false
 });
-scene.add(new THREE.Points(bgGeo, bgMat));
+const bgPoints = new THREE.Points(bgGeo, bgMat);
+scene.add(bgPoints);
+
+const GALAXY_STAR_COUNT = 4000;
+const galaxyGeo = new THREE.BufferGeometry();
+const galaxyPositions = new Float32Array(GALAXY_STAR_COUNT * 3);
+const galaxyColors = new Float32Array(GALAXY_STAR_COUNT * 3);
+for (let i = 0; i < GALAXY_STAR_COUNT; i++) {
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const radius = 180 + Math.random() * 70;
+    const x = radius * Math.sin(phi) * Math.cos(theta);
+    const y = radius * Math.sin(phi) * Math.sin(theta);
+    const z = radius * Math.cos(phi);
+    galaxyPositions[i * 3] = x;
+    galaxyPositions[i * 3 + 1] = y;
+    galaxyPositions[i * 3 + 2] = z;
+    const color = getGalaxyColor();
+    galaxyColors[i * 3] = color.r;
+    galaxyColors[i * 3 + 1] = color.g;
+    galaxyColors[i * 3 + 2] = color.b;
+}
+galaxyGeo.setAttribute('position', new THREE.BufferAttribute(galaxyPositions, 3));
+galaxyGeo.setAttribute('color', new THREE.BufferAttribute(galaxyColors, 3));
+const galaxyMat = new THREE.PointsMaterial({
+    size: 3.5,
+    map: particleTex,
+    transparent: true,
+    opacity: 0.45,
+    vertexColors: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
+});
+const galaxyField = new THREE.Points(galaxyGeo, galaxyMat);
+scene.add(galaxyField);
+
+scene.background = new THREE.Color(0x050c1c);
 
 // ============================================
 // SHAPE GENERATION FUNCTIONS
@@ -491,10 +615,82 @@ function initUIHandlers() {
     });
 }
 
+const logElements = {};
+const logElementIds = {
+    hands: 'log-hands',
+    openness: 'log-openness',
+    gesture: 'log-gesture',
+    expansion: 'log-expansion',
+    swirl: 'log-swirl',
+    wiggle: 'log-wiggle',
+    explosion: 'log-explosion',
+    size: 'log-size',
+    movement: 'log-movement',
+    swipe: 'log-swipe'
+};
+
+function cacheLogElements() {
+    Object.entries(logElementIds).forEach(([key, id]) => {
+        logElements[key] = document.getElementById(id);
+    });
+}
+
+function updateLog(key, value) {
+    if (logElements[key]) {
+        logElements[key].innerText = value;
+    }
+}
+
+function filterLandmarks(landmarks, timestampMs) {
+    if (!landmarks) return [];
+    const timestamp = timestampMs / 1000;
+    return landmarks.map((hand, handIndex) => hand.map((landmark, landmarkIndex) => {
+        const filtered = { ...landmark };
+        ['x', 'y', 'z'].forEach(axis => {
+            const key = `${handIndex}-${landmarkIndex}-${axis}`;
+            if (!landmarkFilterBank.has(key)) {
+                landmarkFilterBank.set(
+                    key,
+                    new OneEuroFilter(
+                        CONFIG.filters.freq,
+                        CONFIG.filters.minCutoff,
+                        CONFIG.filters.beta,
+                        CONFIG.filters.dCutoff
+                    )
+                );
+            }
+            filtered[axis] = landmarkFilterBank.get(key).filter(landmark[axis], timestamp);
+        });
+        return filtered;
+    }));
+}
+
+function updateGestureFeedback(label, confidence = 0) {
+    if (!gestureFeedbackEl || !gestureFeedbackLabel || !gestureFeedbackBar) return;
+    gestureFeedbackLabel.innerText = label;
+    const clamped = Math.max(0, Math.min(1, confidence));
+    gestureFeedbackBar.style.width = `${(clamped * 100).toFixed(1)}%`;
+    gestureFeedbackEl.style.opacity = 0.35 + clamped * 0.65;
+}
+
+function commitGestureState(label, intensity = 0.05) {
+    const thresholds = CONFIG.gestures.modeThresholds;
+    if (gestureState.active === label) {
+        gestureState.confidence = Math.min(1, gestureState.confidence + intensity);
+    } else {
+        gestureState.confidence = Math.max(0, gestureState.confidence - thresholds.decay);
+        if (gestureState.confidence <= thresholds.exit) {
+            gestureState.active = label;
+            gestureState.confidence = thresholds.enter + intensity;
+        }
+    }
+    updateGestureFeedback(gestureState.active, gestureState.confidence);
+}
+
 // ============================================
 // HAND DETECTION
 // ============================================
-let video, handCanvas, handCtx, loader, startBtn, wiggleVal, depthVal;
+let video, handCanvas, handCtx, loader, startBtn, wiggleVal, depthVal, gestureFeedbackEl, gestureFeedbackLabel, gestureFeedbackBar;
 
 let handLandmarker = null;
 let lastVideoTime = -1;
@@ -515,6 +711,16 @@ let smoothedPulse = 0.0;
 let freezeTimeTarget = 1.0;
 let currentGesture = 'None';
 let gestureDetectionEnabled = true;
+
+// Rotation Control
+let targetRotationSpeed = CONFIG.physics.baseRotationSpeed;
+let smoothedRotationSpeed = CONFIG.physics.baseRotationSpeed;
+let prevFistAngle = null;
+let lastGestureSampleTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+
+function decayRotationTarget() {
+    targetRotationSpeed += (CONFIG.physics.baseRotationSpeed - targetRotationSpeed) * CONFIG.physics.rotationIdleDecay;
+}
 
 // Swipe Detection
 let prevHandX = null;
@@ -604,6 +810,7 @@ function detectHands() {
 
         try {
             const result = handLandmarker.detectForVideo(video, now);
+            result.landmarks = filterLandmarks(result.landmarks, now);
             drawHandLandmarks(result);
             processGestures(result);
         } catch (err) {
@@ -665,19 +872,85 @@ function drawHandLandmarks(result) {
 // ============================================
 // GESTURE DETECTION FUNCTIONS
 // ============================================
+function getHandScale(hand) {
+    const wrist = hand[0];
+    const indexBase = hand[5];
+    const pinkyBase = hand[17];
+    const palmWidth = Math.hypot(indexBase.x - pinkyBase.x, indexBase.y - pinkyBase.y);
+    const palmLength = Math.hypot(hand[9].x - wrist.x, hand[9].y - wrist.y);
+    return Math.max(0.01, (palmWidth + palmLength) * 0.5);
+}
+
+function getPalmTwistAngle(hand) {
+    const wrist = hand[0];
+    const indexBase = hand[5];
+    const pinkyBase = hand[17];
+
+    const wristToIndex = new THREE.Vector3(
+        indexBase.x - wrist.x,
+        indexBase.y - wrist.y,
+        (indexBase.z || 0) - (wrist.z || 0)
+    );
+    const wristToPinky = new THREE.Vector3(
+        pinkyBase.x - wrist.x,
+        pinkyBase.y - wrist.y,
+        (pinkyBase.z || 0) - (wrist.z || 0)
+    );
+    const palmNormal = new THREE.Vector3().crossVectors(wristToIndex, wristToPinky).normalize();
+    const palmAxis = new THREE.Vector3(
+        indexBase.x - pinkyBase.x,
+        indexBase.y - pinkyBase.y,
+        (indexBase.z || 0) - (pinkyBase.z || 0)
+    ).normalize();
+
+    const horizontalAngle = Math.atan2(palmAxis.y, palmAxis.x);
+    const depthAngle = Math.atan2(palmNormal.z, palmNormal.x);
+    return horizontalAngle + depthAngle * 0.5;
+}
+
+function normalizeAngleDiff(angle) {
+    return Math.atan2(Math.sin(angle), Math.cos(angle));
+}
+
+function handleFistRotation(hand, deltaTime) {
+    const twistAngle = getPalmTwistAngle(hand);
+
+    if (prevFistAngle === null) {
+        prevFistAngle = twistAngle;
+        return false;
+    }
+
+    const deltaAngle = normalizeAngleDiff(twistAngle - prevFistAngle);
+    prevFistAngle = twistAngle;
+
+    const rotationVelocity = deltaAngle / Math.max(deltaTime, 0.016);
+    if (Math.abs(rotationVelocity) < CONFIG.physics.minRotationVelocity) {
+        return false;
+    }
+
+    const adjustedVelocity = THREE.MathUtils.clamp(
+        rotationVelocity * CONFIG.physics.fistRotationMultiplier,
+        -CONFIG.physics.maxGestureRotationSpeed,
+        CONFIG.physics.maxGestureRotationSpeed
+    );
+    targetRotationSpeed = adjustedVelocity;
+    return true;
+}
+
 function countExtendedFingers(hand) {
     const fingerTips = [8, 12, 16, 20];
     const fingerPIPs = [6, 10, 14, 18];
+    const handScale = getHandScale(hand);
+    const fingerThreshold = Math.max(0.02, 0.18 * handScale);
+    const thumbThreshold = Math.max(0.02, 0.35 * handScale);
     let count = 0;
 
-    // Thumb
     const thumbDist = Math.abs(hand[4].x - hand[2].x);
-    if (thumbDist > 0.04) count++;
+    if (thumbDist > thumbThreshold) count++;
 
-    // Other fingers
     fingerTips.forEach((tip, i) => {
         const yDiff = hand[fingerPIPs[i]].y - hand[tip].y;
-        if (yDiff > 0.03) count++;
+        if (yDiff > fingerThreshold) count++;
     });
 
     return count;
@@ -686,11 +959,8 @@ function countExtendedFingers(hand) {
 function detectPinch(hand) {
     const thumb = hand[4];
     const index = hand[8];
-    const dist = Math.sqrt(
-        Math.pow(thumb.x - index.x, 2) +
-        Math.pow(thumb.y - index.y, 2)
-    );
-    return dist < 0.08;
+    const dist = Math.hypot(thumb.x - index.x, thumb.y - index.y);
+    return dist < 0.45 * getHandScale(hand);
 }
 
 function getPinchCenter(hand) {
@@ -702,35 +972,27 @@ function getPinchCenter(hand) {
 }
 
 function detectPeaceSign(hand) {
-    // Index and middle should be extended
-    const indexUp = hand[8].y < hand[6].y - 0.03;
-    const middleUp = hand[12].y < hand[10].y - 0.03;
+    const handScale = getHandScale(hand);
+    const fingerLiftThreshold = Math.max(0.015, 0.12 * handScale);
+    const indexUp = hand[8].y < hand[6].y - fingerLiftThreshold;
+    const middleUp = hand[12].y < hand[10].y - fingerLiftThreshold;
 
-    // Ring and pinky should be down
     const palm = hand[9];
-    const ringDist = Math.sqrt(
-        Math.pow(hand[16].x - palm.x, 2) +
-        Math.pow(hand[16].y - palm.y, 2)
-    );
-    const pinkyDist = Math.sqrt(
-        Math.pow(hand[20].x - palm.x, 2) +
-        Math.pow(hand[20].y - palm.y, 2)
-    );
+    const ringDist = Math.hypot(hand[16].x - palm.x, hand[16].y - palm.y) / handScale;
+    const pinkyDist = Math.hypot(hand[20].x - palm.x, hand[20].y - palm.y) / handScale;
 
-    return indexUp && middleUp && ringDist < 0.12 && pinkyDist < 0.12;
+    return indexUp && middleUp && ringDist < 0.65 && pinkyDist < 0.65;
 }
 
 function detectFist(hand) {
     const palm = hand[9];
     const tips = [4, 8, 12, 16, 20];
+    const threshold = Math.max(0.04, 0.55 * getHandScale(hand));
 
     let closedCount = 0;
     tips.forEach(t => {
-        const dist = Math.sqrt(
-            Math.pow(hand[t].x - palm.x, 2) +
-            Math.pow(hand[t].y - palm.y, 2)
-        );
-        if (dist < 0.10) closedCount++;
+        const dist = Math.hypot(hand[t].x - palm.x, hand[t].y - palm.y);
+        if (dist < threshold) closedCount++;
     });
 
     return closedCount >= 4;
@@ -743,6 +1005,95 @@ function getHandDirection(hand) {
         x: middle.x - wrist.x,
         y: middle.y - wrist.y
     };
+}
+
+function aggregateHandData(hands) {
+    const fingerTipIndices = [4, 8, 12, 16, 20];
+    const aggregate = {
+        tipPositions: [],
+        openness: 0,
+        avgHandSize: 0,
+        direction: { x: 0, y: 0 }
+    };
+
+    if (!hands.length) {
+        return aggregate;
+    }
+
+    hands.forEach(hand => {
+        const wrist = hand[0];
+        let tipDist = 0;
+
+        fingerTipIndices.forEach(index => {
+            const tip = hand[index];
+            const distance = Math.hypot(tip.x - wrist.x, tip.y - wrist.y);
+            tipDist += distance;
+            aggregate.tipPositions.push({ x: tip.x, y: tip.y });
+        });
+
+        aggregate.openness += tipDist / fingerTipIndices.length;
+        aggregate.avgHandSize += Math.hypot(hand[12].x - wrist.x, hand[12].y - wrist.y);
+        const direction = getHandDirection(hand);
+        aggregate.direction.x += direction.x;
+        aggregate.direction.y += direction.y;
+    });
+
+    const invCount = 1 / hands.length;
+    aggregate.openness *= invCount;
+    aggregate.avgHandSize *= invCount;
+    aggregate.direction.x *= invCount;
+    aggregate.direction.y *= invCount;
+
+    return aggregate;
+}
+
+function computeTipMovement(currentTips) {
+    if (!prevTips.length || prevTips.length !== currentTips.length) {
+        prevTips = currentTips;
+        return 0;
+    }
+
+    let movement = 0;
+    for (let i = 0; i < currentTips.length; i++) {
+        const dx = currentTips[i].x - prevTips[i].x;
+        const dy = currentTips[i].y - prevTips[i].y;
+        movement += Math.sqrt(dx * dx + dy * dy);
+    }
+
+    prevTips = currentTips;
+    return movement * 10.0;
+}
+
+function applyDirectionalWind(direction, magnitude, target) {
+    if (!target) return;
+    target.set(direction.x * magnitude, -direction.y * magnitude, 0);
+}
+
+function applyFingerForceFields(hands, deltaTime) {
+    const force = new THREE.Vector3();
+    if (!hands || !hands.length) {
+        fingerVelocityHistory.clear();
+        return force;
+    }
+
+    const dt = Math.max(deltaTime, 0.016);
+    hands.forEach((hand, handIndex) => {
+        const fingerTipIndices = [8, 12, 16, 20];
+        fingerTipIndices.forEach(tipIndex => {
+            const tip = hand[tipIndex];
+            const key = `${handIndex}-${tipIndex}`;
+            const prev = fingerVelocityHistory.get(key);
+            if (prev) {
+                const vx = (tip.x - prev.x) / dt;
+                const vy = (tip.y - prev.y) / dt;
+                force.x += vx;
+                force.y -= vy;
+            }
+            fingerVelocityHistory.set(key, { x: tip.x, y: tip.y, z: tip.z || 0 });
+        });
+    });
+
+    return force.multiplyScalar(6.5);
 }
 
 function detectSwipe(hand) {
@@ -765,7 +1116,7 @@ function detectSwipe(hand) {
     const timeDelta = (now - swipeStartTime) / 1000;
     const velocity = Math.abs(totalDelta) / Math.max(timeDelta, 0.001);
 
-    document.getElementById('log-swipe').innerText = `${Math.abs(totalDelta).toFixed(2)} (${velocity.toFixed(2)} v)`;
+    updateLog('swipe', `${Math.abs(totalDelta).toFixed(2)} (${velocity.toFixed(2)} v)`);
 
     let swipeDirection = null;
 
@@ -804,9 +1155,13 @@ function changeShape(direction) {
 }
 
 function processGestures(result) {
-    const hands = result.landmarks;
+    const hands = result.landmarks || [];
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const deltaTime = Math.max(0.001, (now - lastGestureSampleTime) / 1000);
+    lastGestureSampleTime = now;
+    let rotationGestureActive = false;
 
-    document.getElementById('log-hands').innerText = hands.length;
+    updateLog('hands', hands.length);
 
     let targetAttractorStrength = 0.0;
     let targetWindForce = new THREE.Vector3(0, 0, 0);
@@ -827,32 +1182,45 @@ function processGestures(result) {
         smoothedPulse *= 0.95;
         currentGesture = 'Gestures Disabled';
         prevHandX = null;
+        prevTips = [];
+        prevFistAngle = null;
+        targetRotationSpeed = CONFIG.physics.baseRotationSpeed;
         wiggleVal.innerText = "DISABLED";
         depthVal.innerText = "DISABLED";
-        document.getElementById('log-openness').innerText = "N/A";
-        document.getElementById('log-gesture').innerText = currentGesture;
-        document.getElementById('log-expansion').innerText = smoothedExpansion.toFixed(3);
-        document.getElementById('log-swirl').innerText = smoothedSwirl.toFixed(3);
-        document.getElementById('log-wiggle').innerText = "0.000";
-        document.getElementById('log-explosion').innerText = "0.000";
-        document.getElementById('log-size').innerText = "N/A";
-        document.getElementById('log-movement').innerText = "0.000";
+        updateLog('openness', "N/A");
+        updateLog('gesture', currentGesture);
+        updateLog('expansion', smoothedExpansion.toFixed(3));
+        updateLog('swirl', smoothedSwirl.toFixed(3));
+        updateLog('wiggle', "0.000");
+        updateLog('explosion', "0.000");
+        updateLog('size', "N/A");
+        updateLog('movement', "0.000");
+        fingerVelocityHistory.clear();
+        commitGestureState(currentGesture, 0.1);
         return;
     }
 
+    let movement = 0;
+
     if (hands.length > 0) {
+        const aggregatedHands = aggregateHandData(hands);
         const hand = hands[0];
         const fingerCount = countExtendedFingers(hand);
+        const fingerFieldForce = applyFingerForceFields(hands, deltaTime);
 
         const isFist = detectFist(hand);
+        let isPinching = false;
+        let isPeaceSign = false;
         if (isFist) {
-            currentGesture = '✊ Fist (Freeze)';
-            freezeTimeTarget = 0.0;
+            currentGesture = '✊ Rotate Fist';
+            freezeTimeTarget = 1.0;
             targetAttractorStrength = 0.0;
             targetWindForce.set(0, 0, 0);
             targetPulse = 0.0;
+            rotationGestureActive = handleFistRotation(hand, deltaTime);
         } else {
-            const isPinching = detectPinch(hand);
+            prevFistAngle = null;
+            isPinching = detectPinch(hand);
             if (isPinching) {
                 currentGesture = '👌 Pinch (Attract)';
                 const pinchCenter = getPinchCenter(hand);
@@ -866,7 +1234,7 @@ function processGestures(result) {
                 targetPulse = 0.0;
                 freezeTimeTarget = 1.0;
             } else {
-                const isPeaceSign = detectPeaceSign(hand);
+                isPeaceSign = detectPeaceSign(hand);
                 if (isPeaceSign) {
                     currentGesture = '✌️ Peace (Pulse)';
                     targetPulse = 1.0;
@@ -886,8 +1254,7 @@ function processGestures(result) {
                         currentGesture = '🖐️ Five Fingers (Expand)';
                         smoothedExplosion = Math.min(1.5, smoothedExplosion + 0.03);
                         targetAttractorStrength = 0.0;
-                        const direction = getHandDirection(hand);
-                        targetWindForce.set(direction.x * 8, -direction.y * 8, 0);
+                        applyDirectionalWind(aggregatedHands.direction, 8, targetWindForce);
                         targetPulse = 0.0;
                         freezeTimeTarget = 1.0;
                     }
@@ -900,8 +1267,7 @@ function processGestures(result) {
                     freezeTimeTarget = 1.0;
                 } else {
                     currentGesture = `🤚 ${fingerCount} Fingers`;
-                    const direction = getHandDirection(hand);
-                    targetWindForce.set(direction.x * 5, -direction.y * 5, 0);
+                    applyDirectionalWind(aggregatedHands.direction, 5, targetWindForce);
                     targetAttractorStrength = 0.0;
                     targetPulse = 0.0;
                     freezeTimeTarget = 1.0;
@@ -910,57 +1276,32 @@ function processGestures(result) {
         }
 
         // Calculate expansion, wiggle, and other effects
-        let totalOpenness = 0;
-        let currentTips = [];
-        let avgHandSize = 0;
-
-        hands.forEach(hand => {
-            const wrist = hand[0];
-            const tips = [4, 8, 12, 16, 20];
-            let tipDist = 0;
-            tips.forEach(t => {
-                const d = Math.sqrt(Math.pow(hand[t].x - wrist.x, 2) + Math.pow(hand[t].y - wrist.y, 2));
-                tipDist += d;
-                currentTips.push({ x: hand[t].x, y: hand[t].y });
-            });
-            totalOpenness += (tipDist / 5);
-            const size = Math.sqrt(Math.pow(hand[12].x - wrist.x, 2) + Math.pow(hand[12].y - wrist.y, 2));
-            avgHandSize += size;
-        });
-
-        // Wiggle
-        let movement = 0;
-        if (prevTips.length === currentTips.length) {
-            for (let i = 0; i < currentTips.length; i++) {
-                const dx = currentTips[i].x - prevTips[i].x;
-                const dy = currentTips[i].y - prevTips[i].y;
-                movement += Math.sqrt(dx * dx + dy * dy);
-            }
-            movement *= 10.0;
-        }
-        prevTips = currentTips;
+        movement = computeTipMovement(aggregatedHands.tipPositions);
         smoothedWiggle += (movement - smoothedWiggle) * CONFIG.physics.smoothingFactor;
         wiggleVal.innerText = Math.round(smoothedWiggle * 100) + "%";
-        document.getElementById('log-movement').innerText = movement.toFixed(3);
-        document.getElementById('log-wiggle').innerText = smoothedWiggle.toFixed(3);
+        updateLog('movement', movement.toFixed(3));
+        updateLog('wiggle', smoothedWiggle.toFixed(3));
 
         // Explosion
-        avgHandSize /= hands.length;
-        let targetExplosion = (0.3 - avgHandSize) * 4.0;
+        let targetExplosion = (0.3 - aggregatedHands.avgHandSize) * 4.0;
         targetExplosion = Math.max(0, Math.min(1, targetExplosion));
         smoothedExplosion += (targetExplosion - smoothedExplosion) * CONFIG.physics.smoothingFactor;
         if (smoothedExplosion > 0.5) depthVal.innerText = "FAR (EXPLODE)";
         else depthVal.innerText = "NEAR (STABLE)";
-        document.getElementById('log-size').innerText = avgHandSize.toFixed(3);
-        document.getElementById('log-explosion').innerText = smoothedExplosion.toFixed(3);
+        updateLog('size', aggregatedHands.avgHandSize.toFixed(3));
+        updateLog('explosion', smoothedExplosion.toFixed(3));
 
         // Expansion
-        let openness = (totalOpenness / hands.length - 0.1) * 3.5;
+        let openness = (aggregatedHands.openness - 0.1) * 3.5;
         openness = Math.max(0, Math.min(1, openness));
         smoothedExpansion += (openness - smoothedExpansion) * CONFIG.physics.smoothingFactor;
-        document.getElementById('log-openness').innerText = openness.toFixed(3);
-        document.getElementById('log-expansion').innerText = smoothedExpansion.toFixed(3);
-        document.getElementById('log-gesture').innerText = currentGesture;
+        updateLog('openness', openness.toFixed(3));
+        updateLog('expansion', smoothedExpansion.toFixed(3));
+        updateLog('gesture', currentGesture);
+
+        if (!isFist && !isPinching) {
+            targetWindForce.add(fingerFieldForce);
+        }
 
         // Smooth gesture effects
         smoothedAttractorStrength += (targetAttractorStrength - smoothedAttractorStrength) * CONFIG.physics.gestureSmoothingFactor;
@@ -976,7 +1317,7 @@ function processGestures(result) {
         } else {
             smoothedSwirl *= 0.95;
         }
-        document.getElementById('log-swirl').innerText = smoothedSwirl.toFixed(3);
+        updateLog('swirl', smoothedSwirl.toFixed(3));
 
     } else {
         // Auto mode when no hands detected
@@ -991,17 +1332,31 @@ function processGestures(result) {
         smoothedPulse *= 0.95;
         currentGesture = 'Auto Mode';
         prevHandX = null;
+        prevTips = [];
+        prevFistAngle = null;
         wiggleVal.innerText = "AUTO";
         depthVal.innerText = "AUTO";
-        document.getElementById('log-openness').innerText = "AUTO";
-        document.getElementById('log-gesture').innerText = currentGesture;
-        document.getElementById('log-expansion').innerText = smoothedExpansion.toFixed(3);
-        document.getElementById('log-swirl').innerText = smoothedSwirl.toFixed(3);
-        document.getElementById('log-wiggle').innerText = "0.000";
-        document.getElementById('log-explosion').innerText = "0.000";
-        document.getElementById('log-size').innerText = "N/A";
-        document.getElementById('log-movement').innerText = "0.000";
+        updateLog('openness', "AUTO");
+        updateLog('gesture', currentGesture);
+        updateLog('expansion', smoothedExpansion.toFixed(3));
+        updateLog('swirl', smoothedSwirl.toFixed(3));
+        updateLog('wiggle', "0.000");
+        updateLog('explosion', "0.000");
+        updateLog('size', "N/A");
+        updateLog('movement', "0.000");
+        targetRotationSpeed = CONFIG.physics.baseRotationSpeed;
+        fingerVelocityHistory.clear();
     }
+
+    if (!rotationGestureActive) {
+        decayRotationTarget();
+    }
+
+    const gestureEnergy = Math.min(
+        0.3,
+        0.05 + movement * 0.01 + smoothedPulse * 0.05 + smoothedWindForce.length() * 0.02
+    );
+    commitGestureState(currentGesture, gestureEnergy);
 }
 
 // ============================================
@@ -1028,7 +1383,12 @@ function animate() {
     mat.uniforms.uWindForce.value.copy(smoothedWindForce);
     mat.uniforms.uPulse.value = smoothedPulse;
 
-    particles.rotation.y += delta * 0.05 * mat.uniforms.uFreezeTime.value;
+    smoothedRotationSpeed += (targetRotationSpeed - smoothedRotationSpeed) * CONFIG.physics.rotationSmoothingFactor;
+    const rotationDelta = delta * smoothedRotationSpeed * mat.uniforms.uFreezeTime.value;
+    particles.rotation.y += rotationDelta;
+    bgPoints.rotation.y -= rotationDelta * 0.65;
+    galaxyField.rotation.y -= rotationDelta * 0.45;
+    galaxyField.rotation.x = THREE.MathUtils.lerp(galaxyField.rotation.x, Math.sin(clock.elapsedTime * 0.05) * 0.1, 0.05);
     composer.render();
 }
 
@@ -1057,6 +1417,8 @@ window.addEventListener('beforeunload', () => {
     bgGeo.dispose();
     mat.dispose();
     bgMat.dispose();
+    galaxyGeo.dispose();
+    galaxyMat.dispose();
     particleTex.dispose();
     renderer.dispose();
 
@@ -1075,6 +1437,11 @@ function init() {
     startBtn = document.getElementById('start-btn');
     wiggleVal = document.getElementById('wiggle-val');
     depthVal = document.getElementById('depth-val');
+    gestureFeedbackEl = document.getElementById('gesture-feedback');
+    gestureFeedbackLabel = document.getElementById('gesture-label');
+    gestureFeedbackBar = document.getElementById('gesture-meter-fill');
+    cacheLogElements();
+    updateGestureFeedback('Initializing', 0.2);
 
     setShape('sphere');
     initUIHandlers();

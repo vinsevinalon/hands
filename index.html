@@ -139,6 +139,46 @@
             float: right;
         }
 
+        #gesture-feedback {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 220px;
+            padding: 15px 18px;
+            border-radius: 14px;
+            background: rgba(5, 15, 35, 0.75);
+            border: 1px solid rgba(0, 200, 255, 0.4);
+            color: #e0f6ff;
+            font-size: 14px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            box-shadow: 0 0 25px rgba(0, 150, 255, 0.35);
+            z-index: 7;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+
+        #gesture-label {
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .gesture-meter {
+            width: 100%;
+            height: 8px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.15);
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        #gesture-meter-fill {
+            width: 30%;
+            height: 100%;
+            background: linear-gradient(90deg, #28ffe9, #ffa200);
+            transition: width 0.2s ease;
+        }
+
         /* HUD UI */
         #hud {
             position: absolute;
@@ -334,6 +374,12 @@
         <div class="log-entry"><span class="log-label">Explosion:</span> <span id="log-explosion" class="log-value">0.00</span></div>
         <div class="log-entry"><span class="log-label">Avg Hand Size:</span> <span id="log-size" class="log-value">0.00</span></div>
         <div class="log-entry"><span class="log-label">Movement:</span> <span id="log-movement" class="log-value">0.00</span></div>
+    </div>
+    <div id="gesture-feedback">
+        <div id="gesture-label">Auto Mode</div>
+        <div class="gesture-meter">
+            <div id="gesture-meter-fill"></div>
+        </div>
     </div>
     <div id="loader">Initializing...</div>
     <button id="start-btn"
