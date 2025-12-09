@@ -224,6 +224,97 @@ const CONFIG = {
 };
 
 // ============================================
+// PARTICLE PHYSICS MODES
+// ============================================
+const PHYSICS_MODES = {
+    NORMAL: {
+        name: 'Normal',
+        icon: '✨',
+        description: 'Default particle behavior',
+        gravity: 0,
+        friction: 0.98,
+        bounce: 0,
+        magneticStrength: 0,
+        viscosity: 1.0,
+        turbulence: 0,
+        quantumJump: 0
+    },
+    GRAVITY: {
+        name: 'Gravity',
+        icon: '🌍',
+        description: 'Particles fall with realistic physics',
+        gravity: 0.25,
+        friction: 0.995,
+        bounce: 0.8,
+        floorY: -25,
+        magneticStrength: 0,
+        viscosity: 0.999,
+        turbulence: 0.03,
+        quantumJump: 0
+    },
+    MAGNETIC: {
+        name: 'Magnetic',
+        icon: '🧲',
+        description: 'Particles attract or repel from hands',
+        gravity: 0.01,
+        friction: 0.98,
+        bounce: 0,
+        magneticStrength: 5.0,
+        magneticRange: 50,
+        magneticFalloff: 1.5,
+        viscosity: 0.96,
+        turbulence: 0.02,
+        quantumJump: 0
+    },
+    FLUID: {
+        name: 'Fluid',
+        icon: '💧',
+        description: 'Liquid-like flowing motion',
+        gravity: 0.08,
+        friction: 0.95,
+        bounce: 0.4,
+        floorY: -20,
+        viscosity: 0.92,
+        surfaceTension: 0.3,
+        turbulence: 0.1,
+        flowiness: 1.5,
+        magneticStrength: 1.2,
+        magneticRange: 30,
+        magneticFalloff: 2.0,
+        quantumJump: 0
+    },
+    QUANTUM: {
+        name: 'Quantum',
+        icon: '⚛️',
+        description: 'Particles teleport and phase shift',
+        gravity: 0,
+        friction: 0.99,
+        bounce: 0,
+        magneticStrength: 2.0,
+        magneticRange: 40,
+        magneticFalloff: 2.0,
+        viscosity: 0.97,
+        turbulence: 0.3,
+        quantumJump: 0.002,
+        phaseShift: 0.08,
+        entanglement: 0.02
+    },
+    ANTIGRAVITY: {
+        name: 'Anti-Gravity',
+        icon: '🎈',
+        description: 'Particles float upward',
+        gravity: -0.18,
+        friction: 0.994,
+        bounce: 0.7,
+        ceilingY: 25,
+        magneticStrength: 0,
+        viscosity: 0.98,
+        turbulence: 0.05,
+        quantumJump: 0
+    }
+};
+
+// ============================================
 // SCENE SETUP
 // ============================================
 const scene = new THREE.Scene();
@@ -395,6 +486,17 @@ let enhancedDetector = null;
 let dataCollector = null;
 let aiEnabled = false;
 let trainingMode = false;
+
+// ============================================
+// PHYSICS MODE STATE
+// ============================================
+let currentPhysicsMode = 'NORMAL';
+let physicsTransitionProgress = 0;
+let previousPhysicsMode = 'NORMAL';
+let particleVelocities = [];
+let particleAccelerations = [];
+let globalHandPositions = []; // Store hand positions for physics calculations
+
 const controlState = {
     glow: {
         value: CONFIG.controls.glow.default,
@@ -1343,6 +1445,25 @@ function setShape(type) {
 window.setShape = setShape;
 
 // ============================================
+// PHYSICS MODE UI
+// ============================================
+function initPhysicsModeUI() {
+    // Physics mode button listeners
+    document.querySelectorAll('[data-physics]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const mode = btn.dataset.physics;
+            switchPhysicsMode(mode);
+            
+            // Update button states
+            document.querySelectorAll('[data-physics]').forEach(b => {
+                b.classList.remove('active');
+            });
+            btn.classList.add('active');
+        });
+    });
+}
+
+// ============================================
 // UI EVENT HANDLERS
 // ============================================
 function initUIHandlers() {
@@ -2161,6 +2282,7 @@ function processGestures(result) {
     let movement = 0;
 
     if (hands.length === 0) {
+        globalHandPositions = []; // Clear hand positions for physics
         const t = Date.now() * 0.001;
         smoothedExpansion = 0.8 + Math.sin(t) * 0.2;
         smoothedSwirl = Math.sin(t * 0.5) * 0.5;
@@ -2214,6 +2336,24 @@ function processGestures(result) {
 
     if (hands.length > 0) {
         const aggregatedHands = aggregateHandData(hands);
+        
+        // Update global hand positions for physics calculations
+        globalHandPositions = [];
+        hands.forEach(hand => {
+            // Store palm center position
+            const wrist = hand[0];
+            const middle = hand[9];
+            globalHandPositions.push({
+                x: (wrist.x + middle.x) / 2,
+                y: (wrist.y + middle.y) / 2,
+                z: (wrist.z + middle.z) / 2
+            });
+            // Store fingertip positions
+            [4, 8, 12, 16, 20].forEach(tipIdx => {
+                globalHandPositions.push(hand[tipIdx]);
+            });
+        });
+        
         const hand = hands[0];
         const fingerCount = countExtendedFingers(hand);
         const fingerFieldForce = applyFingerForceFields(hands, deltaTime);
@@ -2324,6 +2464,37 @@ function processGestures(result) {
             });
         }
 
+        // Physics Mode Gesture Mapping (Two-hand gestures)
+        if (hands.length === 2) {
+            const hand1Fingers = countExtendedFingers(hands[0]);
+            const hand2Fingers = countExtendedFingers(hands[1]);
+            
+            // Both hands with same finger count switches physics mode
+            if (hand1Fingers === hand2Fingers && hand1Fingers >= 2 && hand1Fingers <= 5) {
+                const gestureKey = `${hand1Fingers}-${hand1Fingers}`;
+                const modeMap = {
+                    '2-2': 'GRAVITY',      // Both peace signs = Gravity
+                    '3-3': 'MAGNETIC',     // Both 3 fingers = Magnetic
+                    '4-4': 'FLUID',        // Both 4 fingers = Fluid
+                    '5-5': 'QUANTUM'       // Both open hands = Quantum
+                };
+                
+                if (modeMap[gestureKey] && currentPhysicsMode !== modeMap[gestureKey]) {
+                    // Cooldown check to prevent rapid switching
+                    const now = Date.now();
+                    if (!window.lastPhysicsModeSwitch || (now - window.lastPhysicsModeSwitch) > 2000) {
+                        switchPhysicsMode(modeMap[gestureKey]);
+                        window.lastPhysicsModeSwitch = now;
+                        
+                        // Update UI
+                        document.querySelectorAll('[data-physics]').forEach(btn => {
+                            btn.classList.toggle('active', btn.dataset.physics === modeMap[gestureKey]);
+                        });
+                    }
+                }
+            }
+        }
+
         // Calculate expansion, wiggle, and other effects
         movement = computeTipMovement(aggregatedHands.tipPositions);
         smoothedWiggle += (movement - smoothedWiggle) * CONFIG.physics.smoothingFactor;
@@ -2381,6 +2552,211 @@ function processGestures(result) {
     
     // Release pooled vector
     vector3Pool.release(targetWindForce);
+}
+
+// ============================================
+// PHYSICS MODE FUNCTIONS
+// ============================================
+
+function initializePhysicsArrays() {
+    // Initialize velocity and acceleration arrays for each particle
+    particleVelocities = [];
+    particleAccelerations = [];
+    
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        particleVelocities.push(new THREE.Vector3(0, 0, 0));
+        particleAccelerations.push(new THREE.Vector3(0, 0, 0));
+    }
+}
+
+function applyPhysicsMode(delta) {
+    const mode = PHYSICS_MODES[currentPhysicsMode];
+    if (!mode || currentPhysicsMode === 'NORMAL') return;
+    
+    const targetPositions = geo.attributes.aTarget.array;
+    const dt = Math.min(delta, 0.1); // Cap delta to prevent physics explosions
+    
+    // Pre-calculate hand positions in world space once (optimization)
+    const handWorldPositions = [];
+    if (mode.magneticStrength > 0 && globalHandPositions.length > 0) {
+        globalHandPositions.forEach(handPos => {
+            handWorldPositions.push(new THREE.Vector3(
+                (handPos.x - 0.5) * 60,
+                (0.5 - handPos.y) * 45,
+                (handPos.z || 0) * 40 - 20
+            ));
+        });
+    }
+    
+    // Reusable vectors (reduce allocations)
+    const pos = new THREE.Vector3();
+    const toHand = new THREE.Vector3();
+    const tempVec = new THREE.Vector3();
+    
+    // Main physics loop
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        const idx = i * 3;
+        pos.set(targetPositions[idx], targetPositions[idx + 1], targetPositions[idx + 2]);
+        const vel = particleVelocities[i];
+        const acc = particleAccelerations[i];
+        
+        // Reset acceleration
+        acc.set(0, 0, 0);
+        
+        // Apply Gravity (simple addition, no condition needed)
+        acc.y += mode.gravity;
+        
+        // Apply Magnetic Force (optimized with pre-calculated positions)
+        if (handWorldPositions.length > 0) {
+            const magneticRange = mode.magneticRange;
+            const magneticRangeSq = magneticRange * magneticRange;
+            
+            for (let h = 0; h < handWorldPositions.length; h++) {
+                toHand.subVectors(handWorldPositions[h], pos);
+                const distSq = toHand.lengthSq();
+                
+                // Skip if too close or too far (using squared distance for performance)
+                if (distSq < 0.01 || distSq > magneticRangeSq) continue;
+                
+                const dist = Math.sqrt(distSq);
+                const falloff = Math.pow(1 - (dist / magneticRange), mode.magneticFalloff || 2.0);
+                const forceMag = mode.magneticStrength * falloff;
+                toHand.multiplyScalar(forceMag / dist); // Normalize and scale in one step
+                acc.add(toHand);
+            }
+        }
+        
+        // Apply Turbulence
+        if (mode.turbulence > 0) {
+            acc.x += (Math.random() - 0.5) * mode.turbulence;
+            acc.y += (Math.random() - 0.5) * mode.turbulence;
+            acc.z += (Math.random() - 0.5) * mode.turbulence;
+        }
+        
+        // Quantum Effects (optimized with early exits)
+        if (mode.quantumJump > 0 && Math.random() < mode.quantumJump) {
+            pos.x += (Math.random() - 0.5) * 15;
+            pos.y += (Math.random() - 0.5) * 15;
+            pos.z += (Math.random() - 0.5) * 15;
+            vel.multiplyScalar(0.5);
+        }
+        
+        if (mode.phaseShift && Math.random() < mode.phaseShift * dt) {
+            tempVec.set(Math.random(), Math.random(), Math.random()).normalize();
+            vel.applyAxisAngle(tempVec, Math.random() * Math.PI * 0.5);
+        }
+        
+        if (mode.entanglement && Math.random() < mode.entanglement * dt) {
+            const pairIdx = Math.floor(Math.random() * PARTICLE_COUNT);
+            if (pairIdx !== i) {
+                const px = targetPositions[pairIdx * 3];
+                const py = targetPositions[pairIdx * 3 + 1];
+                const pz = targetPositions[pairIdx * 3 + 2];
+                pos.x = pos.x * 0.95 + px * 0.05;
+                pos.y = pos.y * 0.95 + py * 0.05;
+                pos.z = pos.z * 0.95 + pz * 0.05;
+            }
+        }
+        
+        // Update velocity and position
+        tempVec.copy(acc).multiplyScalar(dt);
+        vel.add(tempVec);
+        vel.multiplyScalar(mode.viscosity * mode.friction); // Combine multiplications
+        pos.add(vel);
+        
+        // Collision detection (optimized with early exits)
+        if (mode.floorY !== undefined && pos.y < mode.floorY) {
+            pos.y = mode.floorY;
+            vel.y = Math.abs(vel.y) * mode.bounce;
+            vel.x *= 0.9;
+            vel.z *= 0.9;
+        } else if (mode.ceilingY !== undefined && pos.y > mode.ceilingY) {
+            pos.y = mode.ceilingY;
+            vel.y = -Math.abs(vel.y) * mode.bounce;
+            vel.x *= 0.9;
+            vel.z *= 0.9;
+        }
+        
+        // Fluid surface tension (sparse sampling for performance)
+        if (mode.surfaceTension > 0 && i % 10 === 0) {
+            tempVec.set(0, 0, 0);
+            let nearbyCount = 0;
+            const checkStart = Math.max(0, i - 50);
+            const checkEnd = Math.min(PARTICLE_COUNT, i + 50);
+            
+            for (let j = checkStart; j < checkEnd; j += 10) {
+                if (j === i) continue;
+                const dx = targetPositions[j * 3] - pos.x;
+                const dy = targetPositions[j * 3 + 1] - pos.y;
+                const dz = targetPositions[j * 3 + 2] - pos.z;
+                const distSq = dx * dx + dy * dy + dz * dz;
+                
+                if (distSq > 0.01 && distSq < 25) { // 0.1 < dist < 5
+                    const dist = Math.sqrt(distSq);
+                    const strength = mode.surfaceTension / dist;
+                    tempVec.x += dx * strength / dist;
+                    tempVec.y += dy * strength / dist;
+                    tempVec.z += dz * strength / dist;
+                    nearbyCount++;
+                }
+            }
+            
+            if (nearbyCount > 0) {
+                tempVec.divideScalar(nearbyCount);
+                vel.add(tempVec);
+            }
+        }
+        
+        // Write back to buffer
+        targetPositions[idx] = pos.x;
+        targetPositions[idx + 1] = pos.y;
+        targetPositions[idx + 2] = pos.z;
+    }
+    
+    geo.attributes.aTarget.needsUpdate = true;
+}
+
+function switchPhysicsMode(newMode) {
+    if (!PHYSICS_MODES[newMode]) {
+        console.warn(`Physics mode "${newMode}" not found`);
+        return;
+    }
+    
+    previousPhysicsMode = currentPhysicsMode;
+    currentPhysicsMode = newMode;
+    physicsTransitionProgress = 0;
+    
+    const mode = PHYSICS_MODES[newMode];
+    console.log(`🔄 Physics Mode: ${mode.icon} ${mode.name} - ${mode.description}`);
+    
+    // CRITICAL FIX: Reset all physics state when switching modes
+    // This ensures immediate visual feedback and clean transition
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+        // Reset velocities to zero
+        particleVelocities[i].set(0, 0, 0);
+        // Reset accelerations to zero
+        particleAccelerations[i].set(0, 0, 0);
+    }
+    
+    // Reset particle positions to their base target positions (no physics applied)
+    const targetArr = geo.attributes.aTarget.array;
+    const posArr = geo.attributes.position.array;
+    for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
+        posArr[i] = targetArr[i];
+    }
+    geo.attributes.position.needsUpdate = true;
+    
+    console.log(`✅ Physics state reset for ${mode.name} mode`);
+    
+    // Update UI if physics mode indicator exists
+    const modeIndicator = document.getElementById('physics-mode-indicator');
+    if (modeIndicator) {
+        modeIndicator.textContent = `${mode.icon} ${mode.name}`;
+        modeIndicator.style.animation = 'pulse 0.5s ease-out';
+        setTimeout(() => {
+            modeIndicator.style.animation = '';
+        }, 500);
+    }
 }
 
 // ============================================
@@ -2517,6 +2893,12 @@ function animate() {
     smoothedRotationSpeed += (targetRotationSpeed - smoothedRotationSpeed) * CONFIG.physics.rotationSmoothingFactor;
     const rotationDelta = delta * smoothedRotationSpeed * mat.uniforms.uFreezeTime.value;
     cosmicRotation += rotationDelta;
+
+    // Apply physics mode
+    if (currentPhysicsMode !== 'NORMAL') {
+        applyPhysicsMode(delta);
+    }
+
     cosmicCluster.rotation.y = cosmicRotation;
     
     if (backgroundsLoaded) {
@@ -2617,6 +2999,10 @@ function init() {
     initUIHandlers();
     initControlPanelToggle();
     initStartButton();
+    initPhysicsModeUI();
+    
+    // Initialize physics arrays
+    initializePhysicsArrays();
     
     // Initialize AI
     initAI().then(loaded => {

@@ -298,6 +298,129 @@
 
         .btn.active {
             background: rgba(255, 160, 0, 0.2);
+            border-color: rgba(255, 160, 0, 0.6);
+            color: #fff;
+            box-shadow: 0 0 20px rgba(255, 160, 0, 0.3);
+        }
+
+        /* Physics Mode Controls */
+        .physics-panel {
+            flex-direction: column;
+            align-items: stretch;
+            flex: 1 1 100%;
+        }
+
+        .panel-label {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: rgba(200, 230, 255, 0.8);
+            text-align: center;
+            margin-bottom: 10px;
+        }
+
+        .physics-controls {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 10px;
+            width: 100%;
+        }
+
+        .physics-btn {
+            background: rgba(10, 20, 50, 0.6);
+            border: 1px solid rgba(100, 150, 255, 0.2);
+            border-radius: 12px;
+            padding: 12px 8px;
+            color: rgba(200, 230, 255, 0.7);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            font-family: 'Rajdhani', sans-serif;
+        }
+
+        .physics-btn:hover {
+            background: rgba(20, 40, 80, 0.8);
+            border-color: rgba(100, 200, 255, 0.5);
+            transform: translateY(-3px);
+            box-shadow: 0 4px 15px rgba(100, 200, 255, 0.3);
+            color: #fff;
+        }
+
+        .physics-btn.active {
+            background: rgba(100, 200, 255, 0.25);
+            border-color: rgba(100, 200, 255, 0.8);
+            box-shadow: 0 0 25px rgba(100, 200, 255, 0.5), inset 0 0 15px rgba(100, 200, 255, 0.2);
+            color: #fff;
+            transform: scale(1.05);
+        }
+
+        .physics-btn .icon {
+            font-size: 28px;
+            line-height: 1;
+            filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.4));
+        }
+
+        .physics-btn .label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+        }
+
+        #physics-mode-indicator {
+            position: absolute;
+            top: 80px;
+            left: 20px;
+            background: rgba(5, 15, 35, 0.85);
+            border: 1px solid rgba(100, 200, 255, 0.4);
+            border-radius: 12px;
+            padding: 10px 18px;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            color: #e0f6ff;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            z-index: 8;
+            box-shadow: 0 0 20px rgba(100, 200, 255, 0.3);
+            pointer-events: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); box-shadow: 0 0 35px rgba(100, 200, 255, 0.6); }
+        }
+
+        @media (max-width: 768px) {
+            .physics-controls {
+                grid-template-columns: repeat(3, 1fr);
+                gap: 8px;
+            }
+            
+            .physics-btn {
+                padding: 10px 6px;
+            }
+            
+            .physics-btn .icon {
+                font-size: 24px;
+            }
+            
+            .physics-btn .label {
+                font-size: 10px;
+            }
+            
+            #physics-mode-indicator {
+                top: 120px;
+                font-size: 12px;
+                padding: 8px 14px;
+            }
+        }
+
+        .btn.active.original {
+            background: rgba(255, 160, 0, 0.2);
             border-color: #ffaa00;
             color: #ffaa00;
             box-shadow: 0 0 20px rgba(255, 170, 0, 0.5);
@@ -540,7 +663,41 @@
                 <button class="btn" data-shape="fireworks">Nova</button>
             </div>
         </div>
+
+        <div class="hud-row">
+            <div class="panel physics-panel">
+                <label class="panel-label">Physics Mode</label>
+                <div class="physics-controls">
+                    <button class="physics-btn active" data-physics="NORMAL">
+                        <span class="icon">✨</span>
+                        <span class="label">Normal</span>
+                    </button>
+                    <button class="physics-btn" data-physics="GRAVITY">
+                        <span class="icon">🌍</span>
+                        <span class="label">Gravity</span>
+                    </button>
+                    <button class="physics-btn" data-physics="MAGNETIC">
+                        <span class="icon">🧲</span>
+                        <span class="label">Magnetic</span>
+                    </button>
+                    <button class="physics-btn" data-physics="FLUID">
+                        <span class="icon">💧</span>
+                        <span class="label">Fluid</span>
+                    </button>
+                    <button class="physics-btn" data-physics="QUANTUM">
+                        <span class="icon">⚛️</span>
+                        <span class="label">Quantum</span>
+                    </button>
+                    <button class="physics-btn" data-physics="ANTIGRAVITY">
+                        <span class="icon">🎈</span>
+                        <span class="label">Anti-G</span>
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
+
+    <div id="physics-mode-indicator">✨ Normal</div>
 
     <script type="importmap">
         {
