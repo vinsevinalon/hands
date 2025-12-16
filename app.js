@@ -6,9 +6,10 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { FilesetResolver, HandLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm';
-import EnhancedGestureDetector from './src/ai/enhanced-detection.js';
-import DatasetCollector from './src/ai/training/dataset-collector.js';
+import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
+import CONFIG, { PHYSICS_MODES } from './src/config.js';
+import domCache from './src/ui/dom-cache.js';
+import { LowPassFilter, OneEuroFilter } from './src/filters/smoothing.js';
 
 // ============================================
 // OBJECT POOL - Reduce GC pressure
@@ -25,294 +26,6 @@ const vector3Pool = {
 };
 
 // ============================================
-// DOM ELEMENT CACHE - Reduce DOM queries
-// ============================================
-const domCache = {
-    video: null,
-    handCanvas: null,
-    handCtx: null,
-    loader: null,
-    startBtn: null,
-    wiggleVal: null,
-    depthVal: null,
-    gestureFeedbackEl: null,
-    gestureFeedbackLabel: null,
-    gestureFeedbackBar: null,
-    cameraFeed: null,
-    gestureToggle: null,
-    hud: null,
-    controlsToggle: null,
-    particleColor: null,
-    bokehColor: null,
-    colorValue: null,
-    bokehColorValue: null,
-    initialized: false,
-    
-    init() {
-        if (this.initialized) return;
-        this.video = document.getElementById('input-video');
-        this.cameraFeed = document.getElementById('camera-feed');
-        this.handCanvas = document.getElementById('hand-canvas');
-        this.handCtx = this.handCanvas?.getContext('2d', { willReadFrequently: true });
-        this.loader = document.getElementById('loader');
-        this.startBtn = document.getElementById('start-btn');
-        this.wiggleVal = document.getElementById('wiggle-val');
-        this.depthVal = document.getElementById('depth-val');
-        this.gestureFeedbackEl = document.getElementById('gesture-feedback');
-        this.gestureFeedbackLabel = document.getElementById('gesture-label');
-        this.gestureFeedbackBar = document.getElementById('gesture-meter-fill');
-        this.gestureToggle = document.getElementById('gesture-toggle');
-        this.hud = document.getElementById('hud');
-        this.controlsToggle = document.getElementById('controls-toggle');
-        this.particleColor = document.getElementById('particle-color');
-        this.bokehColor = document.getElementById('bokeh-color');
-        this.colorValue = document.getElementById('color-value');
-        this.bokehColorValue = document.getElementById('bokeh-color-value');
-        this.initialized = true;
-    }
-};
-
-// ============================================
-// CONFIGURATION
-// ============================================
-const CONFIG = {
-    particles: {
-        // Adaptive particle count based on device performance
-        get count() {
-            const isMobile = /Android|webOS|iPhone|iPad|iPod/i.test(navigator.userAgent);
-            const isLowEnd = navigator.hardwareConcurrency <= 4;
-
-            if (isMobile || isLowEnd) return 15000;
-            if (navigator.hardwareConcurrency >= 8) return 40000;
-            return 25000;
-        },
-        backgroundCount: 450,
-        defaultSize: 7.0,
-    },
-    rendering: {
-        pixelRatio: Math.min(window.devicePixelRatio, 2),
-        antialias: false,
-        powerPreference: "high-performance",
-        toneMappingExposure: 1.5,
-    },
-    bloom: {
-        threshold: 0.1,
-        strength: 2.0,
-        radius: 0.5,
-    },
-    camera: {
-        fov: 60,
-        near: 0.1,
-        far: 1000,
-        positionZ: 40,
-    },
-    video: {
-        width: 320, // Reduced from 640 for better performance
-        height: 240, // Reduced from 480
-        facingMode: "user",
-    },
-    handDetection: {
-        fps: 20, // Throttled from 60 FPS
-        numHands: 2,
-    },
-    gestures: {
-        swipeThreshold: 0.15,
-        swipeCooldown: 1000,
-        swipeVelocityMin: 0.15,
-        modeThresholds: {
-            enter: 0.6,
-            exit: 0.35,
-            decay: 0.05
-        }
-    },
-    filters: {
-        freq: 60,
-        minCutoff: 1.0,
-        beta: 0.08,
-        dCutoff: 1.0
-    },
-    physics: {
-        smoothingFactor: 0.1,
-        gestureSmoothingFactor: 0.15,
-        windSmoothingFactor: 0.1,
-        rotationSmoothingFactor: 0.15,
-        baseRotationSpeed: 0.05,
-        maxGestureRotationSpeed: 3.0,
-        fistRotationMultiplier: 1.75,
-        minRotationVelocity: 0.15,
-        rotationIdleDecay: 0.15,
-    },
-    controls: {
-        glow: {
-            sliderMin: 0.0,
-            sliderMax: 4.0,
-            default: 0.0,
-            step: 0.1,
-            displayPrecision: 2,
-            smoothing: 0.08,
-            gamma: 1.35,
-            strengthMin: 0.25,
-            strengthMax: 3.5,
-            radiusMin: 0.2,
-            radiusMax: 0.85,
-            thresholdMin: 0.2,
-            thresholdMax: 0.85
-        },
-        size: {
-            sliderMin: 1.0,
-            sliderMax: 10.0,
-            default: 9.9,
-            step: 0.1,
-            displayPrecision: 2,
-            smoothing: 0.1,
-            gamma: 1.15,
-            baseMin: 2.5,
-            baseMax: 9.5
-        },
-        density: {
-            sliderMin: 0.0,
-            sliderMax: 1.0,
-            default: 1.0,
-            step: 0.01,
-            displayPrecision: 2,
-            smoothing: 0.12,
-            gamma: 0.85,
-            minFactor: 0.02,
-            maxFactor: 1.0
-        },
-        spacing: {
-            sliderMin: 0.3,
-            sliderMax: 4.0,
-            default: 4.0,
-            step: 0.1,
-            displayPrecision: 2,
-            smoothing: 0.12,
-            gamma: 0.75
-        },
-        dotSize: {
-            smoothing: 0.12,
-            min: {
-                sliderMin: 0.4,
-                sliderMax: 2.0,
-                default: 0.65,
-                step: 0.05,
-                displayPrecision: 2
-            },
-            max: {
-                sliderMin: 1.0,
-                sliderMax: 5.0,
-                default: 2.95,
-                step: 0.05,
-                displayPrecision: 2
-            }
-        },
-        halo: {
-            sliderMin: 0.3,
-            sliderMax: 2.5,
-            default: 0.8,
-            step: 0.05,
-            displayPrecision: 2,
-            smoothing: 0.1
-        },
-        bokehColor: {
-            default: '#da1010'
-        },
-        color: {
-            default: '#e0392c'
-        }
-    }
-};
-
-// ============================================
-// PARTICLE PHYSICS MODES
-// ============================================
-const PHYSICS_MODES = {
-    NORMAL: {
-        name: 'Normal',
-        icon: '✨',
-        description: 'Default particle behavior',
-        gravity: 0,
-        friction: 0.98,
-        bounce: 0,
-        magneticStrength: 0,
-        viscosity: 1.0,
-        turbulence: 0,
-        quantumJump: 0
-    },
-    GRAVITY: {
-        name: 'Gravity',
-        icon: '🌍',
-        description: 'Particles fall with realistic physics',
-        gravity: 0.25,
-        friction: 0.995,
-        bounce: 0.8,
-        floorY: -25,
-        magneticStrength: 0,
-        viscosity: 0.999,
-        turbulence: 0.03,
-        quantumJump: 0
-    },
-    MAGNETIC: {
-        name: 'Magnetic',
-        icon: '🧲',
-        description: 'Particles attract or repel from hands',
-        gravity: 0.01,
-        friction: 0.98,
-        bounce: 0,
-        magneticStrength: 5.0,
-        magneticRange: 50,
-        magneticFalloff: 1.5,
-        viscosity: 0.96,
-        turbulence: 0.02,
-        quantumJump: 0
-    },
-    FLUID: {
-        name: 'Fluid',
-        icon: '💧',
-        description: 'Liquid-like flowing motion',
-        gravity: 0.08,
-        friction: 0.95,
-        bounce: 0.4,
-        floorY: -20,
-        viscosity: 0.92,
-        surfaceTension: 0.3,
-        turbulence: 0.1,
-        flowiness: 1.5,
-        magneticStrength: 1.2,
-        magneticRange: 30,
-        magneticFalloff: 2.0,
-        quantumJump: 0
-    },
-    QUANTUM: {
-        name: 'Quantum',
-        icon: '⚛️',
-        description: 'Particles teleport and phase shift',
-        gravity: 0,
-        friction: 0.99,
-        bounce: 0,
-        magneticStrength: 2.0,
-        magneticRange: 40,
-        magneticFalloff: 2.0,
-        viscosity: 0.97,
-        turbulence: 0.3,
-        quantumJump: 0.002,
-        phaseShift: 0.08,
-        entanglement: 0.02
-    },
-    ANTIGRAVITY: {
-        name: 'Anti-Gravity',
-        icon: '🎈',
-        description: 'Particles float upward',
-        gravity: -0.18,
-        friction: 0.994,
-        bounce: 0.7,
-        ceilingY: 25,
-        magneticStrength: 0,
-        viscosity: 0.98,
-        turbulence: 0.05,
-        quantumJump: 0
-    }
-};
 
 // ============================================
 // SCENE SETUP
@@ -422,59 +135,6 @@ function getGalaxyColor(bias = Math.random()) {
     return primary.multiply(accelColor(accent, 0.5 + Math.random() * 0.5));
 }
 
-class LowPassFilter {
-    constructor(alpha, initialValue = 0) {
-        this.setAlpha(alpha);
-        this.initialized = false;
-        this.prev = initialValue;
-    }
-    setAlpha(alpha) {
-        this.alpha = Math.max(0, Math.min(1, alpha));
-    }
-    filter(value) {
-        let result;
-        if (this.initialized) {
-            result = this.alpha * value + (1 - this.alpha) * this.prev;
-        } else {
-            result = value;
-            this.initialized = true;
-        }
-        this.prev = result;
-        return result;
-    }
-}
-
-class OneEuroFilter {
-    constructor(freq, minCutoff = 1.0, beta = 0, dCutoff = 1.0) {
-        this.freq = freq;
-        this.minCutoff = minCutoff;
-        this.beta = beta;
-        this.dCutoff = dCutoff;
-        this.xFilter = new LowPassFilter(this.alpha(minCutoff));
-        this.dxFilter = new LowPassFilter(this.alpha(dCutoff));
-        this.lastTime = null;
-    }
-    alpha(cutoff) {
-        const te = 1.0 / this.freq;
-        const tau = 1.0 / (2 * Math.PI * cutoff);
-        return 1.0 / (1.0 + tau / te);
-    }
-    filter(value, timestamp) {
-        if (this.lastTime !== null) {
-            const dt = timestamp - this.lastTime;
-            if (dt > 0) {
-                this.freq = 1.0 / dt;
-            }
-        }
-        this.lastTime = timestamp;
-        const dValue = this.xFilter.initialized ? (value - this.xFilter.prev) * this.freq : 0;
-        const edValue = this.dxFilter.filter(dValue);
-        const cutoff = this.minCutoff + this.beta * Math.abs(edValue);
-        this.xFilter.setAlpha(this.alpha(cutoff));
-        return this.xFilter.filter(value);
-    }
-}
-
 const landmarkFilterBank = new Map();
 const fingerVelocityHistory = new Map();
 const gestureState = { active: 'Auto Mode', confidence: 0.4 };
@@ -482,7 +142,6 @@ const gestureState = { active: 'Auto Mode', confidence: 0.4 };
 // ============================================
 // AI ENHANCEMENT
 // ============================================
-let enhancedDetector = null;
 let dataCollector = null;
 let aiEnabled = false;
 let trainingMode = false;
@@ -1692,25 +1351,110 @@ let lastDetectionTime = 0;
 const detectionInterval = 1000 / CONFIG.handDetection.fps; // Throttled to 20 FPS
 
 // ============================================
-// AI INITIALIZATION
+// AI INITIALIZATION (Worker-based)
 // ============================================
+let gestureWorker = null;
+let gestureWorkerInitPromise = null;
+let gestureWorkerMessageId = 0;
+const gestureWorkerRequests = new Map();
+let workerDetectionInFlight = false;
+let lastWorkerResetTime = 0;
+
+function ensureGestureWorker() {
+    if (!gestureWorker) {
+        gestureWorker = new Worker(new URL('./src/workers/gesture-worker.js', import.meta.url), { type: 'module' });
+        gestureWorker.onmessage = (event) => {
+            const { id, result, error, type } = event.data;
+            const pending = gestureWorkerRequests.get(id);
+            if (!pending) return;
+            gestureWorkerRequests.delete(id);
+            if (error) {
+                pending.reject(new Error(error));
+            } else {
+                pending.resolve({ type, result });
+            }
+        };
+        gestureWorker.onerror = (err) => {
+            console.error('Gesture worker error:', err);
+        };
+    }
+
+    if (!gestureWorkerInitPromise) {
+        gestureWorkerInitPromise = postGestureWorkerMessage('init', { modelPath: '/models/gesture-model.json' })
+            .then(({ result }) => {
+                aiEnabled = !!result?.loaded;
+                if (aiEnabled) {
+                    updateLog('gesture', '🤖 AI Mode Active');
+                }
+                return aiEnabled;
+            })
+            .catch(err => {
+                aiEnabled = false;
+                console.warn('AI worker initialization failed, falling back to rule-based gestures', err);
+                return false;
+            });
+    }
+
+    return gestureWorkerInitPromise;
+}
+
+function postGestureWorkerMessage(type, payload) {
+    if (!gestureWorker) {
+        throw new Error('Gesture worker is not initialized');
+    }
+    const id = ++gestureWorkerMessageId;
+    gestureWorker.postMessage({ id, type, payload });
+    return new Promise((resolve, reject) => {
+        gestureWorkerRequests.set(id, { resolve, reject });
+    });
+}
+
+function requestGestureWorkerReset() {
+    if (!gestureWorker || !aiEnabled) return;
+    const now = Date.now();
+    if (now - lastWorkerResetTime < 200) return;
+    lastWorkerResetTime = now;
+    postGestureWorkerMessage('reset').catch(err => {
+        console.warn('Failed to reset gesture worker', err);
+    });
+}
+
+function requestAIDetection(landmarks, ruleBasedGesture, onResult) {
+    if (!gestureWorker || !aiEnabled || workerDetectionInFlight || !landmarks?.length) return;
+    workerDetectionInFlight = true;
+    postGestureWorkerMessage('detect', {
+        landmarks,
+        ruleBasedGesture
+    }).then(({ result }) => {
+        onResult?.(result);
+    }).catch(err => {
+        console.warn('AI detection error:', err);
+    }).finally(() => {
+        workerDetectionInFlight = false;
+    });
+}
+
+function serializeLandmarksForWorker(landmarks = []) {
+    return landmarks.map(hand => hand.map(point => ({
+        x: point.x,
+        y: point.y,
+        z: point.z || 0
+    })));
+}
+
 async function initAI() {
     try {
-        enhancedDetector = new EnhancedGestureDetector();
-        const loaded = await enhancedDetector.init('/models/gesture-model.json');
-        
+        const loaded = await ensureGestureWorker();
         if (loaded) {
-            aiEnabled = true;
             console.log('✅ AI enhancement loaded successfully');
-            updateLog('gesture', '🤖 AI Mode Active');
-        } else {
-            console.log('⚠️ AI model not found, using rule-based detection');
-            aiEnabled = false;
         }
-        
-        // Initialize data collector for training
-        dataCollector = new DatasetCollector();
-        
+
+        if (!dataCollector) {
+            const module = await import('./src/ai/training/dataset-collector.js');
+            const DatasetCollector = module.default;
+            dataCollector = new DatasetCollector();
+        }
+
         return loaded;
     } catch (err) {
         console.error('AI initialization error:', err);
@@ -1755,9 +1499,8 @@ let lastSwipeTime = 0;
 async function initHandDetection() {
     try {
         loader.innerText = "Loading AI Core...";
-        const vision = await FilesetResolver.forVisionTasks(
-            "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
-        );
+        const wasmBasePath = `${import.meta.env.BASE_URL}mediapipe`;
+        const vision = await FilesetResolver.forVisionTasks(wasmBasePath);
 
         handLandmarker = await HandLandmarker.createFromOptions(vision, {
             baseOptions: {
@@ -2310,9 +2053,7 @@ function processGestures(result) {
         fingerVelocityHistory.clear();
         
         // Reset AI detector
-        if (enhancedDetector) {
-            enhancedDetector.reset();
-        }
+        requestGestureWorkerReset();
         
         if (!rotationGestureActive) {
             decayRotationTarget();
@@ -2441,17 +2182,16 @@ function processGestures(result) {
         }
 
         // AI Enhancement - Try to improve gesture detection
-        if (enhancedDetector && aiEnabled) {
-            enhancedDetector.detect(result, ruleBasedGesture).then(aiResult => {
-                if (aiResult.source === 'AI' && aiResult.confidence > 0.85) {
+        if (aiEnabled && gestureWorker) {
+            const serialized = serializeLandmarksForWorker(result.landmarks);
+            requestAIDetection(serialized, ruleBasedGesture, (aiResult) => {
+                if (aiResult?.source === 'AI' && aiResult.confidence > 0.85) {
                     currentGesture = `🤖 ${aiResult.gesture}`;
                     if (aiResult.confidence > 0.9) {
                         console.log(`AI: ${aiResult.gesture} (${(aiResult.confidence * 100).toFixed(1)}%)`);
                     }
                     updateLog('gesture', currentGesture);
                 }
-            }).catch(err => {
-                console.warn('AI detection error:', err);
             });
         }
 
@@ -2963,8 +2703,15 @@ window.addEventListener('beforeunload', () => {
     renderer.dispose();
     
     // Dispose AI resources
-    if (enhancedDetector) {
-        enhancedDetector.dispose();
+    if (gestureWorker) {
+        try {
+            gestureWorker.terminate();
+        } catch (err) {
+            console.warn('Failed terminating gesture worker', err);
+        }
+        gestureWorker = null;
+        gestureWorkerRequests.clear();
+        gestureWorkerInitPromise = null;
     }
 
     console.log('Resources cleaned up');

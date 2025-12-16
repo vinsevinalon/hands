@@ -1,0 +1,546 @@
+html, body {
+width: 100%;
+height: 100%;
+margin: 0;
+overflow: hidden;
+font-family: 'Rajdhani', sans-serif;
+background: transparent;
+}
+
+canvas {
+display: block;
+}
+
+#camera-background {
+position: fixed;
+top: 0;
+left: 0;
+width: 100vw;
+height: 100vh;
+overflow: hidden;
+z-index: -2;
+background: transparent;
+pointer-events: none;
+}
+
+#camera-background video {
+position: absolute;
+top: 0;
+left: 0;
+width: 100%;
+height: 100%;
+object-fit: cover;
+background: transparent;
+filter: none;
+pointer-events: none;
+opacity: 1;
+mix-blend-mode: normal;
+}
+
+#input-video {
+position: absolute;
+width: 1px;
+height: 1px;
+opacity: 0;
+pointer-events: none;
+}
+
+#hand-canvas {
+position: fixed;
+top: 0;
+left: 0;
+width: 100vw;
+height: 100vh;
+z-index: 3;
+pointer-events: none;
+background: transparent;
+}
+
+#gesture-log {
+position: absolute;
+top: 20px;
+right: 20px;
+width: 320px;
+background: rgba(0, 10, 30, 0.85);
+border: 1px solid rgba(0, 170, 255, 0.5);
+border-radius: 10px;
+padding: 15px;
+font-family: 'Rajdhani', monospace;
+font-size: 12px;
+color: #00aaff;
+z-index: 5;
+max-height: 200px;
+overflow-y: auto;
+box-shadow: 0 0 20px rgba(0, 170, 255, 0.3);
+}
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+#gesture-log {
+display: none; /* Hide on mobile for better performance */
+}
+
+#hud {
+width: 98%;
+max-width: none;
+bottom: 80px;
+}
+
+.hud-row {
+flex-direction: column;
+gap: 10px;
+}
+
+.panel {
+padding: 10px 15px;
+flex-wrap: wrap;
+justify-content: center;
+flex: 1 1 auto;
+}
+
+.btn {
+padding: 6px 12px;
+font-size: 11px;
+}
+
+.slider-group {
+min-width: 100px;
+}
+
+.telemetry {
+padding: 0 10px;
+gap: 10px;
+}
+
+.stat-label {
+font-size: 9px;
+}
+
+.stat-value {
+font-size: 16px;
+}
+
+.controls-toggle {
+top: auto;
+bottom: 20px;
+left: 50%;
+transform: translateX(-50%);
+}
+}
+
+#gesture-log .log-title {
+font-size: 10px;
+letter-spacing: 2px;
+text-transform: uppercase;
+color: #ffaa00;
+margin-bottom: 10px;
+border-bottom: 1px solid rgba(255, 170, 0, 0.3);
+padding-bottom: 5px;
+}
+
+#gesture-log .log-entry {
+margin: 5px 0;
+padding: 3px 0;
+border-bottom: 1px solid rgba(0, 170, 255, 0.1);
+}
+
+#gesture-log .log-label {
+color: #00ddff;
+font-weight: 700;
+}
+
+#gesture-log .log-value {
+color: #ffffff;
+float: right;
+}
+
+#gesture-feedback {
+position: absolute;
+top: 20px;
+left: 20px;
+width: 220px;
+padding: 15px 18px;
+border-radius: 14px;
+background: rgba(5, 15, 35, 0.75);
+border: 1px solid rgba(0, 200, 255, 0.4);
+color: #e0f6ff;
+font-size: 14px;
+letter-spacing: 1px;
+text-transform: uppercase;
+box-shadow: 0 0 25px rgba(0, 150, 255, 0.35);
+z-index: 7;
+pointer-events: none;
+transition: opacity 0.2s ease;
+}
+
+#gesture-label {
+font-weight: 700;
+margin-bottom: 10px;
+}
+
+.gesture-meter {
+width: 100%;
+height: 8px;
+border-radius: 10px;
+background: rgba(255, 255, 255, 0.15);
+overflow: hidden;
+border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+#gesture-meter-fill {
+width: 30%;
+height: 100%;
+background: linear-gradient(90deg, #28ffe9, #ffa200);
+transition: width 0.2s ease;
+}
+
+/* HUD UI */
+#hud {
+position: absolute;
+bottom: 30px;
+left: 50%;
+transform: translate(-50%, 0);
+display: flex;
+flex-direction: column;
+align-items: center;
+gap: 15px;
+z-index: 10;
+width: 95%;
+max-width: 900px;
+pointer-events: none;
+transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+#hud.hidden {
+opacity: 0;
+transform: translate(-50%, 60px);
+pointer-events: none;
+}
+
+.hud-row {
+display: flex;
+gap: 20px;
+pointer-events: auto;
+align-items: stretch;
+flex-wrap: wrap;
+justify-content: center;
+width: 100%;
+}
+
+.panel {
+background: rgba(0, 10, 30, 0.7);
+padding: 15px 25px;
+border-radius: 30px;
+border: 1px solid rgba(100, 200, 255, 0.2);
+backdrop-filter: blur(12px);
+box-shadow: 0 0 30px rgba(0, 150, 255, 0.15);
+display: flex;
+gap: 15px;
+align-items: center;
+flex: 1 1 240px;
+flex-wrap: wrap;
+justify-content: center;
+pointer-events: auto;
+}
+
+.controls-toggle {
+position: absolute;
+top: 160px;
+left: 20px;
+z-index: 12;
+background: rgba(5, 15, 30, 0.85);
+color: #e0f6ff;
+border: 1px solid rgba(0, 200, 255, 0.4);
+border-radius: 12px;
+padding: 8px 16px;
+font-family: 'Rajdhani', sans-serif;
+font-size: 12px;
+text-transform: uppercase;
+letter-spacing: 1.5px;
+cursor: pointer;
+transition: all 0.2s ease;
+}
+
+.controls-toggle:hover {
+box-shadow: 0 0 12px rgba(0, 200, 255, 0.4);
+}
+
+.btn {
+background: transparent;
+border: 1px solid rgba(255, 255, 255, 0.1);
+color: rgba(200, 230, 255, 0.7);
+padding: 8px 20px;
+border-radius: 15px;
+cursor: pointer;
+font-family: 'Rajdhani', sans-serif;
+font-size: 14px;
+font-weight: 700;
+text-transform: uppercase;
+letter-spacing: 1.5px;
+transition: all 0.2s ease;
+}
+
+.btn:hover {
+background: rgba(255, 255, 255, 0.1);
+color: #fff;
+box-shadow: 0 0 15px rgba(0, 200, 255, 0.4);
+}
+
+.btn.active {
+background: rgba(255, 160, 0, 0.2);
+border-color: rgba(255, 160, 0, 0.6);
+color: #fff;
+box-shadow: 0 0 20px rgba(255, 160, 0, 0.3);
+}
+
+/* Physics Mode Controls */
+.physics-panel {
+flex-direction: column;
+align-items: stretch;
+flex: 1 1 100%;
+}
+
+.panel-label {
+font-size: 12px;
+text-transform: uppercase;
+letter-spacing: 2px;
+color: rgba(200, 230, 255, 0.8);
+text-align: center;
+margin-bottom: 10px;
+}
+
+.physics-controls {
+display: grid;
+grid-template-columns: repeat(6, 1fr);
+gap: 10px;
+width: 100%;
+}
+
+.physics-btn {
+background: rgba(10, 20, 50, 0.6);
+border: 1px solid rgba(100, 150, 255, 0.2);
+border-radius: 12px;
+padding: 12px 8px;
+color: rgba(200, 230, 255, 0.7);
+cursor: pointer;
+transition: all 0.3s ease;
+display: flex;
+flex-direction: column;
+align-items: center;
+gap: 6px;
+font-family: 'Rajdhani', sans-serif;
+}
+
+.physics-btn:hover {
+background: rgba(20, 40, 80, 0.8);
+border-color: rgba(100, 200, 255, 0.5);
+transform: translateY(-3px);
+box-shadow: 0 4px 15px rgba(100, 200, 255, 0.3);
+color: #fff;
+}
+
+.physics-btn.active {
+background: rgba(100, 200, 255, 0.25);
+border-color: rgba(100, 200, 255, 0.8);
+box-shadow: 0 0 25px rgba(100, 200, 255, 0.5), inset 0 0 15px rgba(100, 200, 255, 0.2);
+color: #fff;
+transform: scale(1.05);
+}
+
+.physics-btn .icon {
+font-size: 28px;
+line-height: 1;
+filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.4));
+}
+
+.physics-btn .label {
+font-size: 11px;
+text-transform: uppercase;
+letter-spacing: 1px;
+font-weight: 700;
+}
+
+#physics-mode-indicator {
+position: absolute;
+top: 80px;
+left: 20px;
+background: rgba(5, 15, 35, 0.85);
+border: 1px solid rgba(100, 200, 255, 0.4);
+border-radius: 12px;
+padding: 10px 18px;
+font-family: 'Rajdhani', sans-serif;
+font-size: 14px;
+font-weight: 700;
+color: #e0f6ff;
+text-transform: uppercase;
+letter-spacing: 1.5px;
+z-index: 8;
+box-shadow: 0 0 20px rgba(100, 200, 255, 0.3);
+pointer-events: none;
+}
+
+@keyframes pulse {
+0%, 100% { transform: scale(1); }
+50% { transform: scale(1.1); box-shadow: 0 0 35px rgba(100, 200, 255, 0.6); }
+}
+
+@media (max-width: 768px) {
+.physics-controls {
+grid-template-columns: repeat(3, 1fr);
+gap: 8px;
+}
+
+.physics-btn {
+padding: 10px 6px;
+}
+
+.physics-btn .icon {
+font-size: 24px;
+}
+
+.physics-btn .label {
+font-size: 10px;
+}
+
+#physics-mode-indicator {
+top: 120px;
+font-size: 12px;
+padding: 8px 14px;
+}
+}
+
+.btn.active.original {
+background: rgba(255, 160, 0, 0.2);
+border-color: #ffaa00;
+color: #ffaa00;
+box-shadow: 0 0 20px rgba(255, 170, 0, 0.5);
+}
+
+.btn.toggle-btn {
+min-width: 150px;
+}
+
+.btn.toggle-btn.disabled {
+background: rgba(255, 50, 50, 0.2);
+border-color: #ff5555;
+color: #ff5555;
+box-shadow: 0 0 20px rgba(255, 85, 85, 0.5);
+}
+
+.btn.toggle-btn.enabled {
+background: rgba(50, 255, 50, 0.2);
+border-color: #55ff55;
+color: #55ff55;
+box-shadow: 0 0 20px rgba(85, 255, 85, 0.5);
+}
+
+/* Sliders */
+.slider-group {
+display: flex;
+flex-direction: column;
+gap: 5px;
+min-width: 120px;
+flex: 1 1 150px;
+}
+
+.slider-label {
+font-size: 10px;
+color: #00aaff;
+letter-spacing: 2px;
+text-transform: uppercase;
+display: flex;
+justify-content: space-between;
+align-items: center;
+gap: 8px;
+}
+
+.slider-value {
+font-size: 11px;
+color: #ffffff;
+letter-spacing: 1px;
+}
+
+input[type=color] {
+width: 44px;
+height: 28px;
+padding: 0;
+border: none;
+border-radius: 8px;
+background: transparent;
+cursor: pointer;
+box-shadow: 0 0 12px rgba(0, 180, 255, 0.35);
+}
+
+input[type=range] {
+-webkit-appearance: none;
+width: 100%;
+background: transparent;
+}
+
+input[type=range]::-webkit-slider-thumb {
+-webkit-appearance: none;
+height: 14px;
+width: 14px;
+border-radius: 50%;
+background: #ffaa00;
+cursor: pointer;
+margin-top: -5px;
+box-shadow: 0 0 10px #ffaa00;
+}
+
+input[type=range]::-webkit-slider-runnable-track {
+width: 100%;
+height: 4px;
+cursor: pointer;
+background: rgba(255, 255, 255, 0.2);
+border-radius: 2px;
+}
+
+/* Telemetry */
+.telemetry {
+display: flex;
+justify-content: space-between;
+width: 100%;
+padding: 0 40px;
+pointer-events: none;
+margin-bottom: 10px;
+}
+
+.stat-group {
+text-align: center;
+}
+
+.stat-label {
+font-size: 11px;
+color: #00aaff;
+letter-spacing: 2px;
+text-transform: uppercase;
+}
+
+.stat-value {
+font-size: 20px;
+color: #fff;
+font-weight: 700;
+text-shadow: 0 0 10px rgba(0, 170, 255, 0.5);
+}
+
+#loader {
+position: absolute;
+top: 50%;
+left: 50%;
+transform: translate(-50%, -50%);
+color: #00aaff;
+font-size: 18px;
+letter-spacing: 4px;
+text-transform: uppercase;
+}
+
+#error-log {
+position: absolute;
+bottom: 10px;
+left: 10px;
+color: red;
+font-family: monospace;
+font-size: 10px;
+display: none;
+}
